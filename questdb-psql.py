@@ -9,7 +9,9 @@ try:
         password='quest',
         host='127.0.0.1',
         port='8812',
-        database='qdb')
+        database='qdb',
+        gssencmode='disable',
+        sslmode='disable')
     cursor = connection.cursor()
 
     # text-only query
