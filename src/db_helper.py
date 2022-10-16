@@ -17,7 +17,7 @@ class db_helper:
         self.database = database
         self.sql_drop_tables = ''
         self.signature_file = ''
-        self.empty = True
+        # self.empty = True
 
 
     def make_connection(self):
@@ -34,7 +34,7 @@ class db_helper:
 
 
     def is_empty(self):
-        return self.empty
+        return not os.path.exists('./sql/drop.sql')
         # tables = self.run_query("SHOW TABLES;", select=True)
         # hacky solution as it relies on there always being 3 hidden tables created by QuestDB
         # return tables is not None and len(list(tables)) > 3
@@ -92,7 +92,7 @@ class db_helper:
         query_create = run_command.runcmd(cmd_create, verbose = False)
         query_drop = run_command.runcmd(cmd_drop, verbose = False)
         self.run_query(query_create)
-        self.empty = False
+        # self.empty = False
         self.sql_drop_tables = query_drop
         drop_file = open('./sql/drop.sql', 'w') 
         drop_file.write(query_drop)
@@ -106,17 +106,17 @@ class db_helper:
         '''
         Deletes the database associated with the given signature file
         '''
-        if self.is_empty():
-            if self.sql_drop_tables == '' and os.path.exists('./sql/drop.sql'):
-                drop_file = open('./sql/drop.sql', 'r')
-                self.sql_drop_tables = drop_file.read()
-                drop_file.close()
-            else:
-                print("""ERROR: There are no tables in the database.\nNothing to delete""")
-                return {'error': 'There are no tables in the database. Nothing to delete',
-                        'self.sql_drop_tables': self.sql_drop_tables,
-                        'os.path.exists': os.path.exists('./sql/drop.sql'),
-                        'ls': os.listdir('./sql')}
+        # if self.sql_drop_tables == '' and os.path.exists('./sql/drop.sql'):
+        if self.sql_drop_tables == '' and not self.is_empty():
+            drop_file = open('./sql/drop.sql', 'r')
+            self.sql_drop_tables = drop_file.read()
+            drop_file.close()
+        elif self.is_empty():
+            print("""ERROR: There are no tables in the database.\nNothing to delete""")
+            return {'error': 'There are no tables in the database. Nothing to delete',
+                    'self.sql_drop_tables': self.sql_drop_tables,
+                    'os.path.exists': os.path.exists('./sql/drop.sql'),
+                    'ls': os.listdir('./sql')}
 
         
         print(f'Deleting tables associated with {self.signature_file}')
@@ -124,7 +124,7 @@ class db_helper:
         # TODO prompt user before running this query and deleting all tables
         self.run_query(self.sql_drop_tables)
         os.remove('./sql/drop.sql')
-        self.empty = True
+        # self.empty = True
         return{'query ran': self.sql_drop_tables}
         
         

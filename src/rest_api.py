@@ -2,6 +2,7 @@ from flask import Flask, request, flash, redirect
 from monitor import monitor
 from werkzeug.utils import secure_filename
 import os
+from log_events import log_events
 
 app = Flask(__name__)
 app.secret_key = 'super secret key'
@@ -62,6 +63,7 @@ def drop_tables():
     query = mon.db.delete_database()
     return {'query': query}
 
-@app.get('/log-event')
-def log_event():
-    return {"logging event":0}
+@app.route('/log-events', methods=['POST'])
+def log():
+    log = log_events(mon, [])
+    return {'logging event':0, 'log': log}
