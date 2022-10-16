@@ -46,14 +46,21 @@ def signature():
             filename = secure_filename(sig_file.filename)  # type: ignore
             path = os.path.join(mon.signature_directory, filename)
             sig_file.save(path)
-            mon.db.create_database(path)
-            return {'signature (POST-created-db)': mon.get_signature()}
+            print(path)
+            query = mon.db.create_database(path)
+            return {'query': query,
+                    'signature (POST-created-db)': mon.get_signature()}
             return redirect(request.url)
     else:
         return 'unsupported request type'
     
     return {'signature (default)': mon.get_signature()}
-    return ""
+
+@app.route('/drop', methods=['GET'])
+def drop_tables():
+    global mon
+    query = mon.db.delete_database()
+    return {'query': query}
 
 @app.get('/log-event')
 def log_event():

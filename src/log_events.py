@@ -1,5 +1,6 @@
 from db_helper import db_helper
-import questdb
+from questdb.ingress import Sender
+from datetime import datetime
 
 db = db_helper()
 
@@ -14,3 +15,10 @@ def log_events(events: list, timestamp_str: str = ""):
         timestamp = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S.%f')
 
     print(f'Logging events: {events} at {timestamp}')
+
+    with Sender('localhost', 9009) as sender:
+        sender.row(
+            'sensors',
+            symbols={'id': 'toronto1'},
+            columns={'temperature': 20.0, 'humidity': 0.5})
+        sender.flush()
