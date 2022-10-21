@@ -8,7 +8,7 @@ RUN apk add --no-cache python3 py3-pip \
     # && source .venv-monpoly/bin/activate \
     && pip3 install questdb psycopg2-binary flask
 
-ENV FLASK_APP=rest_api.py
+ENV FLASK_APP=app.py
 ENV FLASK_RUN_HOST=0.0.0.0
 ENV FLASK_RUN_PORT=5000
 
