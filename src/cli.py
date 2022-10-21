@@ -1,8 +1,8 @@
-from db_helper import db_helper
+from db_helper import DbHelper
 import argparse
 import log_events
 
-def cli(db: db_helper):
+def cli(db: DbHelper):
     parser = argparse.ArgumentParser()
 
     # --create-database <signature-file> --log-event events 
@@ -24,7 +24,7 @@ def cli(db: db_helper):
                         help="DANGER! Takes the path to a signature file and deletes all tables associated with it")
 
     args = parser.parse_args()
-    # db = db_helper()
+    # db = DbHelper()
 
     if (args.signature): db.create_database(args.signature)
     elif (args.events):
