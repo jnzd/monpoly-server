@@ -1,9 +1,9 @@
-from db_helper import db_helper
+from db_helper import DbHelper
 import argparse
 import log_events
 from cli import cli
 
-db = db_helper()
+db = DbHelper()
 monpoly: str
 
 
