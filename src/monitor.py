@@ -18,9 +18,13 @@ class Monitor:
         self.sig_dir = f'{dir_abs}/signatures/'
         self.pol_dir = f'{dir_abs}/policies/'
         self.sql_dir = f'{dir_abs}/sql/'
+        self.events_dir = f'{dir_abs}/events/'
+        self.monitor_logs = f'{dir_abs}/monitor-logs/'
         self.make_dirs(self.sig_dir)
         self.make_dirs(self.pol_dir)
         self.make_dirs(self.sql_dir)
+        self.make_dirs(self.monitor_logs)
+        self.make_dirs(self.events_dir)
         self.monpoly = None
         if sig: self.set_signature(sig)
         if policy: self.set_policy(policy)
@@ -70,14 +74,13 @@ class Monitor:
     def set_policy(self, policy):
         policy_location = f'{self.pol_dir}policy'
         if os.path.exists(policy_location):
-            return {'error': f'signature has already been set',
+            return {'error': f'policy has already been set',
                     'policy_location': policy_location,
                     'ls pol_dir': os.listdir(self.pol_dir)}
         policy_location_abs = os.path.abspath(policy_location)
         os.rename(policy, policy_location_abs)
         self.policy = policy_location_abs
         return {'set policy': policy}
-        
 
     def set_signature(self, sig):
         sig_location = f'{self.sig_dir}sig'
@@ -87,11 +90,10 @@ class Monitor:
                     'ls sig_dir': os.listdir(self.sig_dir)}
         sig_location_abs = os.path.abspath(sig_location)
         os.rename(sig, sig_location_abs)
-        self.signature = sig_location_abs
-        init_log = self.init_database(self.signature)
-        drop_log = self.get_destruct_query(self.signature)
+        self.sig = sig_location_abs
+        init_log = self.init_database(self.sig)
+        drop_log = self.get_destruct_query(self.sig)
         return init_log | drop_log
-
 
     def get_destruct_query(self, sig, verbose: bool = True):
         cmd_drop = f'monpoly -sql_drop {sig}'
@@ -108,7 +110,6 @@ class Monitor:
             drop_file.write(query_drop)
             drop_file.close()
         return {'drop query': query_drop, 'drop file': location}
-        
 
     def init_database(self, sig, verbose: bool = True):
         '''
@@ -120,35 +121,34 @@ class Monitor:
         self.db.run_query(query_create)
         return {'created tables': query_create}
 
-
     def spawn_monpoly(self, sig, pol):
         cmd = f'monpoly -sig {sig} -formula {pol}'
         # TODO: run monpoly as a subprocess
         # return an object to which events can be passed to via stdin
-        p = subprocess.Popen([cmd],
-                             stdout=subprocess.PIPE,
-                             stderr=subprocess.PIPE,
-                             text=True,
-                             shell=True)
+        #TODO is `with open() as ...` the right way to do this?
+        with open(f'{self.monitor_logs}monpoly_stdout.log', 'w') as stdout:
+            with open(f'{self.monitor_logs}monpoly_stderr.log', 'w') as stderr:
+                    p = subprocess.Popen([cmd],
+                                        stdout=stdout,
+                                        stderr=stderr,
+                                        text=True,
+                                        shell=True)
         return p
 
-
-    
     def launch(self):
-        if not self.db_is_empty():
-            self.restore_state()
-        elif not self.signature:
+        # if not self.db_is_empty():
+        #     self.restore_state()
+        if not self.sig:
             return 'no signature provided'
         elif not self.policy:
             return 'no policy provided'
         else:
             if not self.check_policy_and_signature_validity():
-
+                # TODO check that the policy only contains valid predicates
                 return 'check if policy and signature match'
                 
-            self.init_database(self.signature)
-            self.monpoly = self.spawn_monpoly(self.signature, self.policy)
-
+            # self.init_database(self.sig)
+            self.monpoly = self.spawn_monpoly(self.sig, self.policy)
 
     def delete_database(self):
         '''
@@ -166,7 +166,7 @@ class Monitor:
                     'ls': os.listdir(self.sql_dir)}
 
         
-        print(f'Deleting tables associated with {self.signature}')
+        print(f'Deleting tables associated with {self.sig}')
 
         # TODO prompt user before running this query and deleting all tables
         self.db.run_query(query)
@@ -180,13 +180,32 @@ class Monitor:
             for dir in dirs:
                 os.rmdir(os.path.join(root, dir))
 
-
-    def stop(self):
-        # TODO store state
+    def delete_everything(self):
+        self.stop()
         drop_log = self.delete_database()
         self.clear_directory(self.sig_dir)
         self.clear_directory(self.pol_dir)
+        return {'deleted everything': 'done'} | drop_log
+    
+    def stop(self):
+        # TODO store state
         # TODO if monpoly is running, stop it. 
         # Python has some trouble with types as 
         # self.monpoly could have None type
-        return {'stopped': 'stopped monpoly'} | drop_log
+        return {'stopped': 'stopped monpoly'}
+
+    def get_stdout(self):
+        with open(f'{self.monitor_logs}monpoly_stdout.log', 'r') as stdout:
+            log = stdout.read()
+            if log:
+                return log
+            else:
+                return 'stdout is empty'
+
+    def get_stderr(self):
+        with open(f'{self.monitor_logs}monpoly_stdout.log', 'r') as stdout:
+            log = stdout.read()
+            if log:
+                return log
+            else:
+                return 'stderr is empty'
