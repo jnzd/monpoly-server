@@ -4,7 +4,7 @@ from werkzeug.utils import secure_filename
 import os
 from log_events import log_events
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder='./static')
 
 @app.before_first_request
 def before_first_request():
@@ -22,7 +22,18 @@ mon = Monitor()
 
 @app.route('/', methods=['GET'])
 def index():
-    return '<h1>Monpoly Backend</h1>'
+    content = f''' 
+        <h1>Monpoly Backend</h1>
+        <p>
+        You are monitoring the following policy: {mon.get_policy()} <br>
+        With the signature: {mon.get_signature()}  
+        </p>
+        <h2>Monitor stdout</h2>
+        <p> {mon.get_stdout()} <p>
+        <h2>Monitor stderr</h2>
+        <p> {mon.get_stderr()} <p>
+    '''
+    return content
 
 @app.route('/get-policy', methods=['GET', 'POST'])
 def get_policy():
@@ -37,17 +48,17 @@ def set_policy():
     if 'policy' not in request.files:
         flash('No policy part')
         return {'message': 'no file provided, for curl use `-F` and not `-d`', 
-                'signature (POST)': mon.get_policy()}
-    sig_file = request.files['signature']
-    if sig_file == '':
+                'policy (POST)': mon.get_policy()}
+    pol_file = request.files['policy']
+    if pol_file == '':
         flash('No selected file')
         return {'message': 'filename can\'t be empty',
-                'signature (POST-empty-name)': mon.get_signature()}
+                'policy (POST-empty-name)': mon.get_policy()}
     else:
-        filename = secure_filename(sig_file.filename)  # type: ignore
-        path = os.path.join(mon.sig_dir, filename)
-        sig_file.save(path)
-        return mon.set_signature(path)
+        filename = secure_filename(pol_file.filename)  # type: ignore
+        path = os.path.join(mon.pol_dir, filename)
+        pol_file.save(path)
+        return mon.set_policy(path)
 
 @app.route('/get-signature', methods=['GET'])
 def get_signature():
@@ -91,8 +102,8 @@ def stop_monitor():
 
 @app.route('/reset-everything', methods=['GET'])
 def drop_tables():
-    stop_message = mon.stop()
-    return stop_message
+    delete_message = mon.delete_everything()
+    return delete_message
 
 @app.route('/log-events', methods=['POST'])
 def log():
@@ -108,7 +119,10 @@ def log():
         return {'message': 'filename can\'t be empty'}
     else:
         filename = secure_filename(events_file.filename)  # type: ignore
+        path = os.path.join(mon.events_dir, filename)
+        events_file.save(path)
+        result = log_events(mon, path)
+        return result | {'message': 'events logged'}
         
-    return {'logging event':0}
 
     
