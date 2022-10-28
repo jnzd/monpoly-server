@@ -29,8 +29,36 @@ class Monitor:
         if sig: self.set_signature(sig)
         if policy: self.set_policy(policy)
 
-    def check_policy_and_signature_validity(self):
-        return True
+    def check_monitorability(self, sig, pol):
+        cmd_check = f'monpoly -check -sig {sig} -formula {pol}'
+        # TODO: run monpoly as a subprocess
+        # return an object to which events can be passed to via stdin
+        #TODO is `with open() as ...` the right way to do this?
+        stdout_check_path = f'{self.monitor_logs}monpoly_stdout_check.log'
+        stderr_check_path = f'{self.monitor_logs}monpoly_stderr_check.log'
+        out = ''
+        with open(stdout_check_path, 'w') as stdout_check:
+            with open(stderr_check_path, 'w') as stderr_check:
+                check_process = subprocess.Popen([cmd_check],
+                                    stdout=stdout_check,
+                                    stderr=stderr_check,
+                                    text=True,
+                                    shell=True)
+                check_process.wait()
+
+        with open(stdout_check_path, 'r') as stdout_check:
+            with open(stderr_check_path, 'r') as stderr_check:
+                out = stdout_check.read()
+                err = stderr_check.read()
+        
+        os.remove(stdout_check_path)
+        os.remove(stderr_check_path)
+        out = f'{err} \n {out}'
+        if "The analyzed formula is monitorable." not in out:
+            return {'monitorable': False, 'message': out}
+        else:
+            return {'monitorable': True, 'message': out}
+                    
 
     def make_dirs(self, path):
         if not os.path.exists(path):
@@ -41,7 +69,7 @@ class Monitor:
     
     def get_signature(self):
         sig = ''
-        if self.sig == '':
+        if not os.path.exists(self.sig):
             sig = 'no signature set'
         else:
             with open(self.sig, 'r') as sig_file:
@@ -51,7 +79,7 @@ class Monitor:
 
     def get_policy(self):
         policy = ''
-        if self.policy == '':
+        if not os.path.exists(self.policy):
             policy = 'no policy set'
         else: 
             with open(self.policy, 'r') as pol_file:
@@ -59,8 +87,10 @@ class Monitor:
                 pol_file.close()
         return policy
     
+    def get_schema(self):
+        return self.db.run_query('SHOW TABLES;', select = True)
+    
     def restore_state(self):
-        # TODO
         log = {}
         if os.path.exists(f'{self.sig_dir}/sig'):
             self.sig = f'{self.sig_dir}/sig'
@@ -68,12 +98,16 @@ class Monitor:
         if os.path.exists(f'{self.pol_dir}/policy'):
             self.policy = f'{self.pol_dir}/policy'
             log |= {'restored policy': self.get_policy()}
+        # TODO if monpoly was running previously, start it again
+        # TODO run events from database through monpoly
                 
         return {'restore_state()': 'done'} | log
 
     def set_policy(self, policy):
         policy_location = f'{self.pol_dir}policy'
-        if os.path.exists(policy_location):
+        # as long as monpoly isn't running yet, the policy can still be changed
+        # TODO allow for policy change later on
+        if os.path.exists(policy_location) and self.monpoly:
             return {'error': f'policy has already been set',
                     'policy_location': policy_location,
                     'ls pol_dir': os.listdir(self.pol_dir)}
@@ -84,7 +118,8 @@ class Monitor:
 
     def set_signature(self, sig):
         sig_location = f'{self.sig_dir}sig'
-        if os.path.exists(sig_location):
+        # as long as monpoly isn't running yet, the policy can still be changed
+        if os.path.exists(sig_location) and self.monpoly:
             return {'error': f'signature has already been set',
                     'sig_location': sig_location,
                     'ls sig_dir': os.listdir(self.sig_dir)}
@@ -123,32 +158,32 @@ class Monitor:
 
     def spawn_monpoly(self, sig, pol):
         cmd = f'monpoly -sig {sig} -formula {pol}'
-        # TODO: run monpoly as a subprocess
-        # return an object to which events can be passed to via stdin
-        #TODO is `with open() as ...` the right way to do this?
         with open(f'{self.monitor_logs}monpoly_stdout.log', 'w') as stdout:
             with open(f'{self.monitor_logs}monpoly_stderr.log', 'w') as stderr:
-                    p = subprocess.Popen([cmd],
-                                        stdout=stdout,
-                                        stderr=stderr,
-                                        text=True,
-                                        shell=True)
-        return p
+                p = subprocess.Popen([cmd],
+                                    stdout=stdout,
+                                    stderr=stderr,
+                                    text=True,
+                                    shell=True)
+                return p
 
     def launch(self):
-        # if not self.db_is_empty():
-        #     self.restore_state()
         if not self.sig:
             return 'no signature provided'
         elif not self.policy:
             return 'no policy provided'
         else:
-            if not self.check_policy_and_signature_validity():
-                # TODO check that the policy only contains valid predicates
-                return 'check if policy and signature match'
+            check = self.check_monitorability(self.sig, self.policy)
+            if not check['monitorable']:
+                return check['message']
                 
             # self.init_database(self.sig)
-            self.monpoly = self.spawn_monpoly(self.sig, self.policy)
+            spawn_response = self.spawn_monpoly(self.sig, self.policy)
+            if isinstance(spawn_response, str):
+                return spawn_response
+            else:
+                self.monpoly = spawn_response
+                return f'successfully launched monpoly, pid: {spawn_response.pid}'
 
     def delete_database(self):
         '''
@@ -185,16 +220,26 @@ class Monitor:
         drop_log = self.delete_database()
         self.clear_directory(self.sig_dir)
         self.clear_directory(self.pol_dir)
+        self.clear_directory(self.events_dir)
+        self.clear_directory(self.monitor_logs)
         return {'deleted everything': 'done'} | drop_log
     
     def stop(self):
         # TODO store state
-        # TODO if monpoly is running, stop it. 
-        # Python has some trouble with types as 
-        # self.monpoly could have None type
+        if self.monpoly:
+            self.monpoly.kill()
+
         return {'stopped': 'stopped monpoly'}
 
+    def get_monpoly_pid(self):
+        if self.monpoly:
+            return self.monpoly.pid
+        else:
+            return f'monpoly not running'
+
     def get_stdout(self):
+        if not os.path.exists(f'{self.monitor_logs}monpoly_stdout.log'):
+            return {'error': 'stdout log does not exist'}
         with open(f'{self.monitor_logs}monpoly_stdout.log', 'r') as stdout:
             log = stdout.read()
             if log:
@@ -203,6 +248,8 @@ class Monitor:
                 return 'stdout is empty'
 
     def get_stderr(self):
+        if not os.path.exists(f'{self.monitor_logs}monpoly_stderr.log'):
+            return {'error': 'stderr log does not exist'}
         with open(f'{self.monitor_logs}monpoly_stdout.log', 'r') as stdout:
             log = stdout.read()
             if log:

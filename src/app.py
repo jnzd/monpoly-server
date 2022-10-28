@@ -28,6 +28,12 @@ def index():
         You are monitoring the following policy: {mon.get_policy()} <br>
         With the signature: {mon.get_signature()}  
         </p>
+        <h2>Database schema</h2>
+        <p>
+        {mon.get_schema()}
+        </p>
+        <h2>Monitor process id</h2>
+        <p> {mon.get_monpoly_pid()} </p>
         <h2>Monitor stdout</h2>
         <p> {mon.get_stdout()} <p>
         <h2>Monitor stderr</h2>
@@ -92,8 +98,8 @@ def start_monitor():
     # TODO check if signature and/or policy are already set
     # if not check if they are sent with this request
     # if neither return message to set first
-    mon.launch()
-    return dict()
+    launch_msg = mon.launch()
+    return {'launch message': launch_msg}
 
 @app.route('/stop-monitor', methods=['GET', 'POST'])
 def stop_monitor():
