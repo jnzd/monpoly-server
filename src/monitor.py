@@ -240,14 +240,12 @@ class Monitor:
         # TODO store state
         if self.monpoly:
             self.monpoly.kill()
-            # self.monpoly.close()
 
         return {'stopped': 'stopped monpoly'}
 
     def get_monpoly_pid(self):
         if self.monpoly:
             return self.monpoly.pid
-            # return f'{self.monpoly}'
         else:
             return f'monpoly not running'
 
