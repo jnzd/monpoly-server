@@ -98,7 +98,9 @@ class Monitor:
         if os.path.exists(f'{self.pol_dir}/policy'):
             self.policy = f'{self.pol_dir}/policy'
             log |= {'restored policy': self.get_policy()}
-        # TODO if monpoly was running previously, start it again
+        if os.path.exists(f'{self.monitor_logs}/monpoly_stdout.log'):
+            self.launch()
+            log |= {'tried restarting monpoly': self.get_monpoly_pid()}
         # TODO run events from database through monpoly
                 
         return {'restore_state()': 'done'} | log
@@ -157,15 +159,25 @@ class Monitor:
         return {'created tables': query_create}
 
     def spawn_monpoly(self, sig, pol):
-        cmd = f'monpoly -sig {sig} -formula {pol}'
-        with open(f'{self.monitor_logs}monpoly_stdout.log', 'w') as stdout:
-            with open(f'{self.monitor_logs}monpoly_stderr.log', 'w') as stderr:
-                p = subprocess.Popen([cmd],
-                                    stdout=stdout,
-                                    stderr=stderr,
-                                    text=True,
-                                    shell=True)
-                return p
+        cmd = ['monpoly',
+               '-unix',
+               '-ignore_parse_errors',
+               '-verbose', 
+            #    '-debug', 'eval',
+            #    '-log', './examples/logs/ex.log',
+               '-sig', sig, 
+               '-formula', pol
+               ]
+        # cmd_name = f'monpoly'
+        # cmd_list = ['monpoly', '-unix', '-ignore_parse_errors', '-verbose', f'-sig {sig}', f'-formula {pol}']
+        stdout = open(f'{self.monitor_logs}monpoly_stdout.log','w')
+        stderr = open(f'{self.monitor_logs}monpoly_stderr.log','w')
+        p = subprocess.Popen(cmd,
+                            stdin=subprocess.PIPE,
+                            stdout=stdout,
+                            stderr=stderr,
+                            text=True)
+        return p
 
     def launch(self):
         if not self.sig:
@@ -183,7 +195,7 @@ class Monitor:
                 return spawn_response
             else:
                 self.monpoly = spawn_response
-                return f'successfully launched monpoly, pid: {spawn_response.pid}'
+                return f'successfully launched monpoly, pid: {self.get_monpoly_pid()}, args: {self.monpoly.args}'
 
     def delete_database(self):
         '''
@@ -228,12 +240,14 @@ class Monitor:
         # TODO store state
         if self.monpoly:
             self.monpoly.kill()
+            # self.monpoly.close()
 
         return {'stopped': 'stopped monpoly'}
 
     def get_monpoly_pid(self):
         if self.monpoly:
             return self.monpoly.pid
+            # return f'{self.monpoly}'
         else:
             return f'monpoly not running'
 
@@ -241,18 +255,11 @@ class Monitor:
         if not os.path.exists(f'{self.monitor_logs}monpoly_stdout.log'):
             return {'error': 'stdout log does not exist'}
         with open(f'{self.monitor_logs}monpoly_stdout.log', 'r') as stdout:
-            log = stdout.read()
-            if log:
-                return log
-            else:
-                return 'stdout is empty'
+            return stdout.read() or 'stdout is empty'
 
     def get_stderr(self):
-        if not os.path.exists(f'{self.monitor_logs}monpoly_stderr.log'):
+        stderr_path = f'{self.monitor_logs}monpoly_stderr.log'
+        if not os.path.exists(stderr_path):
             return {'error': 'stderr log does not exist'}
-        with open(f'{self.monitor_logs}monpoly_stdout.log', 'r') as stdout:
-            log = stdout.read()
-            if log:
-                return log
-            else:
-                return 'stderr is empty'
+        with open(stderr_path, 'r') as stderr:
+            return stderr.read() or 'stderr is empty'
