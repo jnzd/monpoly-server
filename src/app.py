@@ -32,8 +32,9 @@ def index():
         <p>
         {mon.get_schema()}
         </p>
-        <h2>Monitor process id</h2>
-        <p> {mon.get_monpoly_pid()} </p>
+        <h2>Monitor process information</h2>
+        <p> {mon.get_monpoly_pid()}: {mon.monpoly.args if mon.monpoly and mon.monpoly.args else ""} </p>
+        <p> exit code: {(mon.monpoly.poll()) if mon.monpoly else "not running yet"} </p>
         <h2>Monitor stdout</h2>
         <p> {mon.get_stdout()} <p>
         <h2>Monitor stderr</h2>
