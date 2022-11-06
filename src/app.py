@@ -2,7 +2,6 @@ from flask import Flask, request, flash, redirect
 from monitor import Monitor
 from werkzeug.utils import secure_filename
 import os
-from log_events import log_events
 
 app = Flask(__name__, static_folder='./static')
 
@@ -128,7 +127,7 @@ def log():
         filename = secure_filename(events_file.filename)  # type: ignore
         path = os.path.join(mon.events_dir, filename)
         events_file.save(path)
-        result = log_events(mon, path)
+        result = mon.log_events(path)
         return result | {'message': 'events logged'}
         
 

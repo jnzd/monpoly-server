@@ -3,6 +3,9 @@ import os
 import subprocess
 import json
 from datetime import datetime
+import log_events
+from questdb.ingress import Sender
+from questdb.ingress import Buffer
 
 config_dir       = os.path.abspath('./monitor-data/')
 signature_dir    = f'{config_dir}/signature'
@@ -10,6 +13,7 @@ policy_dir       = f'{config_dir}/policies'
 sql_dir          = f'{config_dir}/sql'
 events_dir       = f'{config_dir}/events'
 monitor_logs_dir = f'{config_dir}/monitor-logs'
+
 
 class Monitor:
     def __init__(self):
@@ -83,6 +87,16 @@ class Monitor:
                 return {'json': json.load(sig_json)}
         else:
             return {'error': 'json signature not set yet'}
+    
+    def check_predicate(self, pred_name: str, attributes: list) -> dict:
+        '''
+        This method checks if the given predicate is valid
+        '''
+        if not self.sig_json:
+            return {'result': False, 'message': 'json signature is missing'}
+        # TODO implement this
+        # TODO refactor this method into monitor.py
+        return {'result': True}
 
     def get_policy(self):
         policy = ''
@@ -364,3 +378,132 @@ class Monitor:
             return {'error': 'stdout log does not exist'}
         with open(self.monpoly_log, 'r') as stdout:
             return stdout.read() or 'stdout is empty'
+
+
+    def store_events_in_db(self, events):
+        '''
+        logs the given events in the database
+        '''
+        buf = Buffer()
+        for e in events:
+            ts = datetime.fromtimestamp(e['timestamp-int'])
+            for p in e['predicates']:
+                if 'name' not in p.keys():
+                    return {'log_events error': 'predicate must have a "name"'}
+                elif 'occurrences' not in p.keys():
+                    # predicate can be named without an occurrence
+                    break
+                name = p['name']
+                for occ in p['occurrences']:
+                    columns = dict()
+                    for i, o in enumerate(occ):
+                        # column names in questdb go from x1 to xn
+                        columns |= {f'x{i+1}': o}
+                    buf.row(
+                        name,
+                        symbols = None,
+                        columns = columns,
+                        at = ts
+                    )
+                    print('added row to buffer')
+        with Sender(self.db.host, self.db.port_influxdb) as sender:
+            print(f'< flushing buffer: {buf} >')
+            self.write_server_log(f'sending buffer {buf} to databas')
+            sender.flush(buf)
+
+        return {'events': events}
+
+    def send_events_to_monpoly(self, event_str: str):
+        if self.monpoly:
+            if self.monpoly.stdin and self.monpoly.stdout:
+                self.write_server_log(f'sending events to monpoly: {event_str}')
+                self.monpoly.stdin.write(event_str)
+                self.monpoly.stdin.flush()
+                result = ''
+                reached_separator = False
+                while not reached_separator:
+                    self.write_server_log('reading monpoly response')
+                    line = self.monpoly.stdout.readline()
+                    self.write_server_log(f'read line from monpoly: {line}')
+                    reached_separator = line.endswith('reached separator')
+                    print(line)
+                    if not reached_separator:
+                        result += line
+                self.write_monpoly_log(result)
+                return{'success': f'sent "{event_str}" to monpoly', 'result': result}
+            else:
+                self.write_server_log(f'could not access stdin or stdout of monpoly (stdout:{mon.monpoly.stdout}, stdin:{mon.monpoly.stdin})')
+                return {'error': 'Error while logging events monpoly stdin is None'}
+        else:
+            self.write_server_log('error: monpoly is not running')
+            return {'error': 'Monpoly is not running'}
+
+            
+    def check_events(self, events: list) -> tuple[list[str], list[str], list]:
+        self.write_server_log(f'enteres check_events with events: {events}')
+        timestamp_list = []
+        faulty_events = []
+        events_list_cleaned =[]
+        for event in events:
+            time_stamp_int = event['timestamp-int']
+            event_cleaned = {'timestamp-int': time_stamp_int, 'predicates': []}
+            time_stamp_str = datetime.fromtimestamp(time_stamp_int).strftime(log_events.timestamp_fmt)
+            monpoly_string = f'@{time_stamp_int} '
+            for predicate in event['predicates']:
+                if 'name' not in predicate.keys():
+                    faulty_events.append(f'skipped predicate {predicate} at timestamp {time_stamp_str} because it has no name')
+                else:
+                    name = predicate['name']
+                    occurrences_cleaned = []
+                    for occurrence in predicate['occurrences']:
+                        well_formed_predicate = self.check_predicate(name, occurrence)
+                        if not well_formed_predicate['result']:
+                            faulty_events.append(f'skipped predicate {name} {occurrence} at timestamp {time_stamp_str} because: {well_formed_predicate["message"]}')
+                        else:
+                            predicate_str = f'{name} {tuple(occurrence)} '
+                            monpoly_string += predicate_str
+                            occurrences_cleaned.append(occurrence)
+                    event_cleaned['predicates'].append({'name': name, 'occurrences': occurrences_cleaned})
+            monpoly_string += ';'
+            timestamp_list.append(monpoly_string)
+            events_list_cleaned.append(event_cleaned)
+
+        return timestamp_list, faulty_events, events_list_cleaned
+
+    
+    def log_events(self, events_json: str):
+        # get current time at this point, so all events with a missing timestamp are logged with the same timestamp
+        self.write_server_log(f'started logging events: {events_json}')
+        timestamp_now = datetime.now()
+        with open(events_json) as f:
+            try:
+                events = json.load(f)
+                events = [{'timestamp-int': log_events.get_timestamp(e, timestamp_now)} | e for e in events]
+                list.sort(events, key=lambda e: e['timestamp-int'])
+                time_stamp_str_list, faulty_predicates, events_cleaned = self.check_events(events)
+                if faulty_predicates:
+                    self.write_server_log(f'faulty predicates will be skipped: {faulty_predicates}')
+                monpoly_output_str = ''
+                for time_stamp_str in time_stamp_str_list:
+                    monpoly_response = self.send_events_to_monpoly(time_stamp_str)
+                    if 'error' in monpoly_response.keys():
+                        self.write_server_log(f'error while sending event to monpoly: {monpoly_response}')
+                        return monpoly_response
+                    elif 'result' in monpoly_response.keys():
+                        self.write_server_log(f'received monpoly response: {monpoly_response["result"]}')
+                        monpoly_output_str += str(monpoly_response['result'])
+                    
+                db_response = self.store_events_in_db(events_cleaned)
+                self.write_server_log(f'stored events in db: {db_response}')
+
+                return {'success': 'logged events',
+                        'monpoly_output': monpoly_output_str,
+                        'db_response': db_response,
+                        'skipped/faulty predicates (check log for more detail)': faulty_predicates,
+                        'logged events': events_cleaned}
+
+            except ValueError as e:
+                print(f'error parsing json file: {e}')
+                self.write_server_log(f'error parsing json file: {e}')
+                self.clear_directory(self.events_dir)
+                return {'error': f'Error while parsing events JSON {e}'}
