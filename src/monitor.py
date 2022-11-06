@@ -1,63 +1,66 @@
 from db_helper import DbHelper
 import os
 import subprocess
-from pathlib import Path
-import run_command
+import json
+from datetime import datetime
+
+config_dir       = os.path.abspath('./monitor-data/')
+signature_dir    = f'{config_dir}/signature'
+policy_dir       = f'{config_dir}/policies'
+sql_dir          = f'{config_dir}/sql'
+events_dir       = f'{config_dir}/events'
+monitor_logs_dir = f'{config_dir}/monitor-logs'
 
 class Monitor:
-    def __init__(self,
-                 sig='', 
-                 policy='', 
-                #  directory='./monitor-data',
-                 db: DbHelper = DbHelper()):
+    def __init__(self):
         self.sig = ''
         self.policy = ''
-        self.db = db
-        directory = './monitor-data'
-        dir_abs = os.path.abspath(directory)
-        self.sig_dir = f'{dir_abs}/signatures/'
-        self.pol_dir = f'{dir_abs}/policies/'
-        self.sql_dir = f'{dir_abs}/sql/'
-        self.events_dir = f'{dir_abs}/events/'
-        self.monitor_logs = f'{dir_abs}/monitor-logs/'
+        self.policy_negate = False
+        self.conf_path = f'{config_dir}/conf.json'
+        self.log_path = f'{config_dir}/log.txt'
+        self.db = DbHelper()
+        self.sig_dir = os.path.abspath(signature_dir)
+        self.pol_dir = os.path.abspath(policy_dir)
+        self.sql_dir = os.path.abspath(sql_dir)
+        self.sql_drop = f'{self.sql_dir}/drop.sql'
+        self.events_dir = os.path.abspath(events_dir)
+        self.monitor_logs = os.path.abspath(monitor_logs_dir)
+        self.sig_json_path = f'{self.sig_dir}/sig.json'
+        self.monpoly_log = f'{self.monitor_logs}/monpoly_stdout.log'
+        self.monitorability_log = f'{self.monitor_logs}/monitorability.log'
         self.make_dirs(self.sig_dir)
         self.make_dirs(self.pol_dir)
         self.make_dirs(self.sql_dir)
         self.make_dirs(self.monitor_logs)
         self.make_dirs(self.events_dir)
         self.monpoly = None
-        if sig: self.set_signature(sig)
-        if policy: self.set_policy(policy)
+        self.restore_state()
+        self.write_config()
+
+    def write_server_log(self, msg: str):
+        time_stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(self.log_path, 'a') as log:
+            log.write(f'[{time_stamp}] {msg}\n')
 
     def check_monitorability(self, sig, pol):
-        cmd_check = f'monpoly -check -sig {sig} -formula {pol}'
-        # TODO: run monpoly as a subprocess
-        # return an object to which events can be passed to via stdin
-        #TODO is `with open() as ...` the right way to do this?
-        stdout_check_path = f'{self.monitor_logs}monpoly_stdout_check.log'
-        stderr_check_path = f'{self.monitor_logs}monpoly_stderr_check.log'
-        out = ''
-        with open(stdout_check_path, 'w') as stdout_check:
-            with open(stderr_check_path, 'w') as stderr_check:
-                check_process = subprocess.Popen([cmd_check],
-                                    stdout=stdout_check,
-                                    stderr=stderr_check,
-                                    text=True,
-                                    shell=True)
-                check_process.wait()
-
-        with open(stdout_check_path, 'r') as stdout_check:
-            with open(stderr_check_path, 'r') as stderr_check:
-                out = stdout_check.read()
-                err = stderr_check.read()
+        self.write_server_log(f'checking monitorability of {sig} and {pol}')
+        cmd = ['monpoly', '-check', '-sig', sig, '-formula', pol]
+        process = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        response = process.stdout
+        with open(self.monitorability_log, 'w') as log:
+            log.write(response)
         
-        os.remove(stdout_check_path)
-        os.remove(stderr_check_path)
-        out = f'{err} \n {out}'
-        if "The analyzed formula is monitorable." not in out:
-            return {'monitorable': False, 'message': out}
+        if "The analyzed formula is monitorable." not in response:
+            return {'monitorable': False, 'message': response}
         else:
-            return {'monitorable': True, 'message': out}
+            return {'monitorable': True, 'message': response}
+
+    def get_monitorability_log(self):
+        if os.path.exists(self.monitorability_log):
+            with open(self.monitorability_log, 'r') as log:
+                return log.read()
+        else:
+            return "monitorability not yet checked"
                     
 
     def make_dirs(self, path):
@@ -68,14 +71,18 @@ class Monitor:
         return not os.path.exists(f'{self.sql_dir}drop.sql')
     
     def get_signature(self):
-        sig = ''
-        if not os.path.exists(self.sig):
-            sig = 'no signature set'
-        else:
+        if os.path.exists(self.sig):
             with open(self.sig, 'r') as sig_file:
-                sig = sig_file.read()
-                sig_file.close()
-        return sig
+                return sig_file.read()
+        else:
+            return 'no signature set'
+    
+    def get_json_signature(self):
+        if os.path.exists(self.sig_json_path):
+            with open(self.sig_json_path, 'r') as sig_json:
+                return {'json': json.load(sig_json)}
+        else:
+            return {'error': 'json signature not set yet'}
 
     def get_policy(self):
         policy = ''
@@ -89,24 +96,71 @@ class Monitor:
     
     def get_schema(self):
         return self.db.run_query('SHOW TABLES;', select = True)
+
+    def restart_monpoly(self, monpoly_state):
+        cmd = ['monpoly', 
+               '-sig', f'{self.sig}',
+               '-formula', f'{self.policy}',
+               '-load', f'{monpoly_state}']
+        monpoly_process = subprocess.Popen(cmd,
+                                           stdin=subprocess.PIPE,
+                                           stdout=subprocess.PIPE,
+                                           stderr=subprocess.STDOUT,
+                                           text=True)
+        self.write_server_log(f'restarted monpoly with cmd: {cmd} (pid: {monpoly_process.pid})')
+        return monpoly_process
+    
+    def get_config(self) -> dict:
+
+        config = {'signature': self.sig,
+                  'signature_json': self.sig_json_path,
+                  'policy': self.policy,
+                  'policy_negate': self.policy_negate,
+                  'db': self.db.get_config(),
+                  'sql_drop': self.sql_drop
+                }
+        return config
     
     def restore_state(self):
-        log = {}
-        if os.path.exists(f'{self.sig_dir}/sig'):
-            self.sig = f'{self.sig_dir}/sig'
-            log |= {'restored sig': self.get_signature()}
-        if os.path.exists(f'{self.pol_dir}/policy'):
-            self.policy = f'{self.pol_dir}/policy'
-            log |= {'restored policy': self.get_policy()}
-        if os.path.exists(f'{self.monitor_logs}/monpoly_stdout.log'):
-            self.launch()
-            log |= {'tried restarting monpoly': self.get_monpoly_pid()}
-        # TODO run events from database through monpoly
-                
-        return {'restore_state()': 'done'} | log
+        if os.path.exists(self.conf_path):
+            with open(self.conf_path, 'r') as conf_json:
+                conf = json.load(conf_json)
+                self.sig = conf['signature']
+                self.sig_json = conf['signature_json']
+                self.policy = conf['policy']
+                self.policy_negate = bool(conf['policy_negate'])
 
-    def set_policy(self, policy):
-        policy_location = f'{self.pol_dir}policy'
+                if 'database' in conf.keys():
+                    self.db = DbHelper(conf['database'])
+                    self.write_server_log(f'Restored database connection: {self.db.get_config()}')
+                else:
+                    self.db = DbHelper()
+                    self.write_server_log(f'established database connection: {self.db.get_config()}')
+
+                if 'monpoly_started' in conf.keys() and bool(conf['monpoly_started']):
+                    if not self.sig:
+                        self.write_server_log('faulty config, cannot restart monpoly, because signature is not set')
+                    if not self.policy:
+                        self.write_server_log('faulty config, cannot restart monpoly, because policy is not set')
+                        
+                    if 'monpoly_state' in conf.keys():
+                        monpoly_state = conf['monpoly_state']
+                        abs_path = os.path.abspath(monpoly_state)
+                        self.monpoly = self.restart_monpoly(abs_path)
+                    else:
+                        #TODO start new monpoly process and rerun all events
+                        pass
+                
+    
+    def write_config(self):
+        conf = self.get_config()
+        with open(self.conf_path, 'w') as conf_json:
+            conf_string = json.dumps(conf)
+            conf_json.write(conf_string)
+            self.write_server_log(f'wrote config: {conf_string}')
+
+    def set_policy(self, policy, negate: bool=False):
+        policy_location = f'{self.pol_dir}/policy'
         # as long as monpoly isn't running yet, the policy can still be changed
         # TODO allow for policy change later on
         if os.path.exists(policy_location) and self.monpoly:
@@ -116,30 +170,52 @@ class Monitor:
         policy_location_abs = os.path.abspath(policy_location)
         os.rename(policy, policy_location_abs)
         self.policy = policy_location_abs
+        self.policy_negate = negate
+        self.write_server_log(f'set policy: {policy_location_abs}')
+        self.write_config()
         return {'set policy': policy}
 
     def set_signature(self, sig):
-        sig_location = f'{self.sig_dir}sig'
+        sig_location = f'{self.sig_dir}/sig'
         # as long as monpoly isn't running yet, the policy can still be changed
-        if os.path.exists(sig_location) and self.monpoly:
-            return {'error': f'signature has already been set',
-                    'sig_location': sig_location,
-                    'ls sig_dir': os.listdir(self.sig_dir)}
+        if os.path.exists(sig_location):
+            if self.monpoly:
+                return {'error': f'signature has already been set',
+                        'sig_location': sig_location,
+                        'ls sig_dir': os.listdir(self.sig_dir)}
+            else:
+                self.delete_database()
         sig_location_abs = os.path.abspath(sig_location)
         os.rename(sig, sig_location_abs)
         self.sig = sig_location_abs
         init_log = self.init_database(self.sig)
         drop_log = self.get_destruct_query(self.sig)
-        return init_log | drop_log
+        json_log = self.create_json_signature(self.sig)
+        self.write_server_log(f'set signature: {sig_location_abs}')
+        self.write_config()
+        return init_log | drop_log | json_log
+    
+    def create_json_signature(self, sig):
+        cmd = ['monpoly', '-sig_to_json', sig]
+        with open(self.sig_json_path, 'w') as json_sig:
+            process = subprocess.run(cmd, capture_output=True, text=True)
+            if process.stderr:
+                return {'error': f'create_json_signature: {process.stderr}'}                                
+            json_sig.write(process.stdout)
+
+        return self.get_json_signature()
+        
 
     def get_destruct_query(self, sig, verbose: bool = True):
-        cmd_drop = f'monpoly -sql_drop {sig}'
-        query_drop = run_command.runcmd(cmd_drop, verbose = False)
+        # cmd_drop = f'monpoly -sql_drop {sig}'
+        cmd = ['monpoly', '-sql_drop', sig]
+        process = subprocess.run(cmd, capture_output=True, text=True)
+        query_drop = process.stdout
 
         if verbose: print(f'Generated drop query: {query_drop}')
 
         self.sql_drop_tables = query_drop
-        location = f'{self.sql_dir}drop.sql'
+        location = self.sql_drop
 
         if verbose: print(f'Writing drop query to {location}')
 
@@ -153,49 +229,54 @@ class Monitor:
         Creates a database from the given signature file
         '''
         if verbose: print(f'Creating database')
-        cmd_create = f'monpoly -sql {sig}'
-        query_create = run_command.runcmd(cmd_create, verbose = False)
+        cmd = ['monpoly', '-sql', sig]
+        process = subprocess.run(cmd, capture_output=True, text=True)
+        query_create = process.stdout
         self.db.run_query(query_create)
         return {'created tables': query_create}
 
     def spawn_monpoly(self, sig, pol):
-        cmd = ['monpoly',
+        cmd = ['monpoly', 
                '-unix',
                '-ignore_parse_errors',
-               '-verbose', 
-            #    '-debug', 'eval',
-            #    '-log', './examples/logs/ex.log',
-               '-sig', sig, 
+               '-ack_sep',
+               '-sig', sig,
                '-formula', pol
+            #    '-verbose', '-debug', 'eval', '-log', './examples/logs/ex.log',
                ]
-        # cmd_name = f'monpoly'
-        # cmd_list = ['monpoly', '-unix', '-ignore_parse_errors', '-verbose', f'-sig {sig}', f'-formula {pol}']
-        stdout = open(f'{self.monitor_logs}monpoly_stdout.log','w')
-        stderr = open(f'{self.monitor_logs}monpoly_stderr.log','w')
+        if self.policy_negate:
+            cmd.append('-negate')
         p = subprocess.Popen(cmd,
                             stdin=subprocess.PIPE,
-                            stdout=stdout,
-                            stderr=stderr,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT,
                             text=True)
         return p
 
     def launch(self):
+        self.write_server_log('launching monpoly')
         if not self.sig:
+            self.write_server_log('cannot launch monpoly, because signature is not set')
             return 'no signature provided'
         elif not self.policy:
+            self.write_server_log('cannot launch monpoly, because policy is not set')
             return 'no policy provided'
-        else:
-            check = self.check_monitorability(self.sig, self.policy)
-            if not check['monitorable']:
-                return check['message']
-                
-            # self.init_database(self.sig)
-            spawn_response = self.spawn_monpoly(self.sig, self.policy)
-            if isinstance(spawn_response, str):
-                return spawn_response
-            else:
-                self.monpoly = spawn_response
-                return f'successfully launched monpoly, pid: {self.get_monpoly_pid()}, args: {self.monpoly.args}'
+
+        check = self.check_monitorability(self.sig, self.policy)
+        if not check['monitorable']:
+            self.write_server_log('cannot launch monpoly, because policy is not monitorable')
+            return check['message']
+
+        save_state_path = f'{self.monitor_logs}/monitor_state'
+        if os.path.exists(save_state_path):
+            self.monpoly = self.restart_monpoly(save_state_path)
+            return 'restarted monpoly'
+            
+        # self.init_database(self.sig)
+        spawn_response = self.spawn_monpoly(self.sig, self.policy)
+        self.monpoly = spawn_response
+        self.write_server_log('launched monpoly')
+        return f'successfully launched monpoly, pid: {self.get_monpoly_pid()}, args: {self.monpoly.args}'
 
     def delete_database(self):
         '''
@@ -237,27 +318,49 @@ class Monitor:
         return {'deleted everything': 'done'} | drop_log
     
     def stop(self):
+        self.write_server_log('stopping monpoly')
         # TODO store state
-        if self.monpoly:
-            self.monpoly.kill()
+        log = dict()
+        if not self.monpoly or self.monpoly.poll():
+            self.write_server_log('(monitor.stop) monpoly is not running')
+            return {'error': 'monpoly not running or already stopped'}
 
-        return {'stopped': 'stopped monpoly'}
+        if self.monpoly:
+            if self.monpoly.stdin:
+                self.write_server_log(f'sending > save_and_exit {self.monitor_logs}/monitor_state <; to monpoly')
+                self.monpoly.stdin.write(f'> save_and_exit {self.monitor_logs}/monitor_state < ;')
+                self.monpoly.stdin.flush()
+                self.write_server_log('waiting for response from monpoly')
+                return_code = self.monpoly.wait()
+                log |= {'stopped monpoly and stored sate, return code': return_code}
+            else:
+                self.write_server_log("can't access stind of monpoly, stopping without saving state")
+                self.monpoly.kill()
+
+        return {'stopped': 'stopped monpoly'} | log
 
     def get_monpoly_pid(self):
         if self.monpoly:
             return self.monpoly.pid
         else:
             return f'monpoly not running'
+    
+    def get_monpoly_exit_code(self):
+        if self.monpoly:
+            exit_code = self.monpoly.poll()
+            if exit_code:
+                return exit_code
+            else:
+                return 'monpoly still running'
+        else:
+            return 'monpoly not running (yet)'
+
+    def write_monpoly_log(self, log):
+        with open(self.monpoly_log, 'a') as monpoly_log:
+            monpoly_log.write(log)
 
     def get_stdout(self):
-        if not os.path.exists(f'{self.monitor_logs}monpoly_stdout.log'):
+        if not os.path.exists(self.monpoly_log):
             return {'error': 'stdout log does not exist'}
-        with open(f'{self.monitor_logs}monpoly_stdout.log', 'r') as stdout:
+        with open(self.monpoly_log, 'r') as stdout:
             return stdout.read() or 'stdout is empty'
-
-    def get_stderr(self):
-        stderr_path = f'{self.monitor_logs}monpoly_stderr.log'
-        if not os.path.exists(stderr_path):
-            return {'error': 'stderr log does not exist'}
-        with open(stderr_path, 'r') as stderr:
-            return stderr.read() or 'stderr is empty'
