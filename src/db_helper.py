@@ -1,23 +1,43 @@
 import psycopg2 as pg
-import run_command
-from pathlib import Path
-import os
 
 class DbHelper:
     def __init__(self,
+                 config=None,
                  user='admin',
                  password='quest',
                  host='questdb',
-                 port=8812,
+                 port_pgsql_wire=8812,
+                 port_influxdb_line=9009,
                  database='qdb'):
+        if config:
+            if 'user' in config.keys():
+                user = config['user']
+            if 'password' in config.keys():
+                password = config['password']
+            if 'host' in config.keys():
+                host = config['host']
+            if 'port_sql' in config.keys():
+                port_pgsql_wire = config['port_sql']
+            if 'port_influx' in config.keys():
+                port_influxdb_line = config['port_influx']
+            if 'database' in config.keys():
+                database = config['database']
+            
         self.user = user
         self.password = password
         self.host = host
-        self.port = port
+        self.port_pgsql = port_pgsql_wire
+        self.port_influxdb = port_influxdb_line
         self.database = database
-        self.sql_drop_tables = ''
-        self.signature_file = ''
-        # self.empty = True
+
+    def get_config(self) -> dict:
+        config = {'user': self.user,
+                  'password': self.password,
+                  'host': self.host,
+                  'port_sql': self.port_pgsql,
+                  'port_influx': self.port_influxdb,
+                  'database': self.database}
+        return config
 
 
     def make_connection(self):
@@ -25,7 +45,7 @@ class DbHelper:
             user=self.user,
             password=self.password,
             host=self.host,
-            port=self.port,
+            port=self.port_pgsql,
             database=self.database,
             # The following two options are needed when connecting from windows
             gssencmode='disable',
