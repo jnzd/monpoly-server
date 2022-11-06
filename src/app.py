@@ -34,11 +34,11 @@ def index():
         </p>
         <h2>Monitor process information</h2>
         <p> {mon.get_monpoly_pid()}: {mon.monpoly.args if mon.monpoly and mon.monpoly.args else ""} </p>
-        <p> exit code: {(mon.monpoly.poll()) if mon.monpoly else "not running yet"} </p>
-        <h2>Monitor stdout</h2>
+        <p> exit code: {mon.get_monpoly_exit_code()} </p>
+        <h3>Monitorability</h3>
+        <p> {mon.get_monitorability_log()} </p>
+        <h2>Monitor log</h2>
         <p> {mon.get_stdout()} <p>
-        <h2>Monitor stderr</h2>
-        <p> {mon.get_stderr()} <p>
     '''
     return content
 
@@ -65,7 +65,8 @@ def set_policy():
         filename = secure_filename(pol_file.filename)  # type: ignore
         path = os.path.join(mon.pol_dir, filename)
         pol_file.save(path)
-        return mon.set_policy(path)
+        negate = True if 'negate' in request.form else False
+        return mon.set_policy(path, negate)
 
 @app.route('/get-signature', methods=['GET'])
 def get_signature():
@@ -104,8 +105,7 @@ def start_monitor():
 
 @app.route('/stop-monitor', methods=['GET', 'POST'])
 def stop_monitor():
-    mon.stop()
-    return dict()
+    return mon.stop()
 
 @app.route('/reset-everything', methods=['GET'])
 def drop_tables():
