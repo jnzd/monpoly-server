@@ -1,4 +1,4 @@
-FROM monpoly:sql-server-0.1
+FROM monpoly-server:dev
 
 # COPY ./src /backend
 
