@@ -127,7 +127,7 @@ def log():
         filename = secure_filename(events_file.filename)  # type: ignore
         path = os.path.join(mon.events_dir, filename)
         events_file.save(path)
-        result = mon.log_events(path)
+        result = mon.log_timepoints(path)
         return result | {'message': 'events logged'}
         
 
