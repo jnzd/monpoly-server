@@ -129,22 +129,6 @@ class Monitor:
             self.db = DbHelper()
             self.write_server_log(f'established database connection: {self.db.get_config()}')
         
-    # def restart_monpoly(self, conf):
-    #     self.write_server_log(f'restart_monpoly({conf})')
-    #     if 'monpoly_started' in conf.keys() and bool(conf['monpoly_started']):
-    #         if not self.sig:
-    #             self.write_server_log('[restart_monpoly()] faulty config, cannot restart monpoly, because signature is not set')
-    #         if not self.policy:
-    #             self.write_server_log('[restart_monpoly()] faulty config, cannot restart monpoly, because policy is not set')
-                
-    #         if 'monpoly_state' in conf.keys():
-    #             monpoly_state = conf['monpoly_state']
-    #             abs_path = os.path.abspath(monpoly_state)
-    #             self.monpoly = self.spawn_monpoly(self.sig, self.policy, restart=abs_path)
-    #         else:
-    #             #TODO start new monpoly process and rerun all events
-    #             pass
-    
     def restore_state(self):
         self.write_server_log(f'restore_state()')
         if os.path.exists(self.conf_path):
@@ -159,9 +143,6 @@ class Monitor:
 
                 self.write_server_log(f'[restore_state()] calling restore_db({conf})')
                 self.restore_db(conf)
-                # self.write_server_log(f'[restore_state()] calling restart_monpoly({conf})')
-                # self.restart_monpoly(conf)
-                
     
     def write_config(self):
         conf = self.get_config()
@@ -218,7 +199,6 @@ class Monitor:
         
 
     def get_destruct_query(self, sig, verbose: bool = True):
-        # cmd_drop = f'monpoly -sql_drop {sig}'
         cmd = ['monpoly', '-sql_drop', sig]
         process = subprocess.run(cmd, capture_output=True, text=True)
         query_drop = process.stdout
@@ -443,7 +423,7 @@ class Monitor:
                 self.write_server_log(f'[send_events_to_monpoly({event_str})] monpoly done - stdout: {result}')
                 return{'success': f'sent "{event_str}" to monpoly', 'output': result}
             else:
-                self.write_server_log(f'could not access stdin or stdout of monpoly (stdout:{mon.monpoly.stdout}, stdin:{mon.monpoly.stdin})')
+                self.write_server_log(f'could not access stdin or stdout of monpoly (stdout:{self.monpoly.stdout}, stdin:{self.monpoly.stdin})')
                 return {'error': 'Error while logging events monpoly stdin is None'}
         else:
             self.write_server_log('error: monpoly is not running')
