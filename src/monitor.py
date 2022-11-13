@@ -503,3 +503,17 @@ class Monitor:
                 self.clear_directory(self.events_dir)
                 return {'error': f'Error while parsing events JSON {e}'}
 
+    def get_events(self):
+        names = []
+        if os.path.exists(self.sig_json_path):
+            with open(self.sig_json_path) as f:
+                signature = json.load(f)
+                for predicate in signature:
+                    names.append(predicate['name'])
+        
+        results = []
+        for table_name in names:
+            self.write_server_log(f'[get_events()] getting events for table: {table_name}')
+            response = self.db.run_query(f'SELECT * FROM {table_name}', select=True)
+            results.append({table_name: response})
+        return results

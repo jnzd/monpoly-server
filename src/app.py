@@ -132,6 +132,10 @@ def log():
         events_file.save(path)
         result = mon.log_timepoints(path)
         return result | {'message': 'events logged'}
+
+@app.route('/get-events', methods=['GET'])
+def get_events():
+    return mon.get_events()
         
 
     
