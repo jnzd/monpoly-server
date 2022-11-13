@@ -29,6 +29,7 @@ class Monitor:
         self.sql_drop = f'{self.sql_dir}/drop.sql'
         self.events_dir = os.path.abspath(events_dir)
         self.monitor_logs = os.path.abspath(monitor_logs_dir)
+        self.monitor_state_path = f'{self.monitor_logs}/state.txt'
         self.sig_json_path = f'{self.sig_dir}/sig.json'
         self.monpoly_log = f'{self.monitor_logs}/monpoly_stdout.log'
         self.monitorability_log = f'{self.monitor_logs}/monitorability.log'
@@ -65,14 +66,22 @@ class Monitor:
                 return log.read()
         else:
             return "monitorability not yet checked"
-                    
+    
+    def signature_set(self):
+        '''returns true if the signature is set'''
+        return self.sig and os.path.exists(self.sig)
+
+    def policy_set(self):
+        '''returns true if the policy is set'''
+        return self.policy and os.path.exists(self.policy)
 
     def make_dirs(self, path):
         if not os.path.exists(path):
             os.makedirs(path)
     
     def db_is_empty(self) -> bool:
-        return not os.path.exists(f'{self.sql_dir}drop.sql')
+        '''returns true if the database is empty'''
+        return not os.path.exists(self.sql_drop)
     
     def get_signature(self):
         if os.path.exists(self.sig):
@@ -88,16 +97,6 @@ class Monitor:
         else:
             return {'error': 'json signature not set yet'}
     
-    def check_predicate(self, pred_name: str, attributes: list) -> dict:
-        '''
-        This method checks if the given predicate is valid
-        '''
-        if not self.sig_json:
-            return {'result': False, 'message': 'json signature is missing'}
-        # TODO implement this
-        # TODO refactor this method into monitor.py
-        return {'result': True}
-
     def get_policy(self):
         policy = ''
         if not os.path.exists(self.policy):
@@ -111,19 +110,6 @@ class Monitor:
     def get_schema(self):
         return self.db.run_query('SHOW TABLES;', select = True)
 
-    def restart_monpoly(self, monpoly_state):
-        cmd = ['monpoly', 
-               '-sig', f'{self.sig}',
-               '-formula', f'{self.policy}',
-               '-load', f'{monpoly_state}']
-        monpoly_process = subprocess.Popen(cmd,
-                                           stdin=subprocess.PIPE,
-                                           stdout=subprocess.PIPE,
-                                           stderr=subprocess.STDOUT,
-                                           text=True)
-        self.write_server_log(f'restarted monpoly with cmd: {cmd} (pid: {monpoly_process.pid})')
-        return monpoly_process
-    
     def get_config(self) -> dict:
 
         config = {'signature': self.sig,
@@ -143,32 +129,38 @@ class Monitor:
             self.db = DbHelper()
             self.write_server_log(f'established database connection: {self.db.get_config()}')
         
-    def restart_monpoly(self, conf):
-        if 'monpoly_started' in conf.keys() and bool(conf['monpoly_started']):
-            if not self.sig:
-                self.write_server_log('faulty config, cannot restart monpoly, because signature is not set')
-            if not self.policy:
-                self.write_server_log('faulty config, cannot restart monpoly, because policy is not set')
+    # def restart_monpoly(self, conf):
+    #     self.write_server_log(f'restart_monpoly({conf})')
+    #     if 'monpoly_started' in conf.keys() and bool(conf['monpoly_started']):
+    #         if not self.sig:
+    #             self.write_server_log('[restart_monpoly()] faulty config, cannot restart monpoly, because signature is not set')
+    #         if not self.policy:
+    #             self.write_server_log('[restart_monpoly()] faulty config, cannot restart monpoly, because policy is not set')
                 
-            if 'monpoly_state' in conf.keys():
-                monpoly_state = conf['monpoly_state']
-                abs_path = os.path.abspath(monpoly_state)
-                self.monpoly = self.restart_monpoly(abs_path)
-            else:
-                #TODO start new monpoly process and rerun all events
-                pass
+    #         if 'monpoly_state' in conf.keys():
+    #             monpoly_state = conf['monpoly_state']
+    #             abs_path = os.path.abspath(monpoly_state)
+    #             self.monpoly = self.spawn_monpoly(self.sig, self.policy, restart=abs_path)
+    #         else:
+    #             #TODO start new monpoly process and rerun all events
+    #             pass
     
     def restore_state(self):
+        self.write_server_log(f'restore_state()')
         if os.path.exists(self.conf_path):
+            self.write_server_log(f'[restore_state()] config file exists: {self.conf_path}')
             with open(self.conf_path, 'r') as conf_json:
                 conf = json.load(conf_json)
+                self.write_server_log(f'[restore_state()] config file loaded: {conf}')
                 self.sig = conf['signature']
                 self.sig_json = conf['signature_json']
                 self.policy = conf['policy']
                 self.policy_negate = bool(conf['policy_negate'])
 
+                self.write_server_log(f'[restore_state()] calling restore_db({conf})')
                 self.restore_db(conf)
-                self.restart_monpoly(conf)
+                # self.write_server_log(f'[restore_state()] calling restart_monpoly({conf})')
+                # self.restart_monpoly(conf)
                 
     
     def write_config(self):
@@ -254,46 +246,59 @@ class Monitor:
         self.db.run_query(query_create)
         return {'created tables': query_create}
 
-    def spawn_monpoly(self, sig, pol):
+    def spawn_monpoly(self, sig, pol, restart: str=''):
         cmd = ['monpoly', 
                '-unix',
-               '-ignore_parse_errors',
                '-ack_sep',
+               '-ignore_parse_errors',
+               '-tolerate_faulty_predicates',
                '-sig', sig,
                '-formula', pol
-            #    '-verbose', '-debug', 'eval', '-log', './examples/logs/ex.log',
                ]
+        if restart:
+            cmd.append('-load')
+            cmd.append(restart)
         if self.policy_negate:
             cmd.append('-negate')
+        self.write_server_log(f'[spawn_monpoly()] cmd={cmd}')
         p = subprocess.Popen(cmd,
                             stdin=subprocess.PIPE,
                             stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT,
                             text=True)
+        if not p.stdout:
+            self.write_server_log(f'[spawn_monpoly()] monpoly_process.stdout is None')
         return p
 
     def launch(self):
-        self.write_server_log('launching monpoly')
-        if not self.sig:
-            self.write_server_log('cannot launch monpoly, because signature is not set')
+        '''
+        starts or restarts monpoly and returns a string message
+        '''
+        if self.monpoly and self.monpoly.poll() is None:
+            self.write_server_log(f'[launch()] monpoly already running, self.monpoly.poll(): {self.monpoly.poll()}')
+            return 'monpoly not started, because it is already running'
+        self.write_server_log('[launch()] launching monpoly')
+        if not self.signature_set():
+        # if not self.sig:
+            self.write_server_log('[launch()] cannot launch monpoly, because signature is not set')
             return 'no signature provided'
-        elif not self.policy:
-            self.write_server_log('cannot launch monpoly, because policy is not set')
+        elif not self.policy_set():
+        # elif not self.policy:
+            self.write_server_log('[launch()] cannot launch monpoly, because policy is not set')
             return 'no policy provided'
 
         check = self.check_monitorability(self.sig, self.policy)
         if not check['monitorable']:
-            self.write_server_log('cannot launch monpoly, because policy is not monitorable')
+            self.write_server_log('[launch()] cannot launch monpoly, because policy is not monitorable')
             return check['message']
 
-        save_state_path = f'{self.monitor_logs}/monitor_state'
-        if os.path.exists(save_state_path):
-            self.monpoly = self.restart_monpoly(save_state_path)
+        if os.path.exists(self.monitor_state_path):
+            self.write_server_log(f'[launch()] attempting to restart monpoly and load state from: {self.monitor_state_path}')
+            self.monpoly = self.spawn_monpoly(self.sig, self.policy, restart=self.monitor_state_path)
             return 'restarted monpoly'
             
         # self.init_database(self.sig)
-        spawn_response = self.spawn_monpoly(self.sig, self.policy)
-        self.monpoly = spawn_response
+        self.monpoly = self.spawn_monpoly(self.sig, self.policy)
         self.write_server_log('launched monpoly')
         return f'successfully launched monpoly, pid: {self.get_monpoly_pid()}, args: {self.monpoly.args}'
 
@@ -307,20 +312,19 @@ class Monitor:
                 query = drop_file.read()
                 drop_file.close()
         elif self.db_is_empty():
-            print("""ERROR: There are no tables in the database.\nNothing to delete""")
-            return {'error': 'There are no tables in the database. Nothing to delete',
-                    'os.path.exists': os.path.exists('./sql/drop.sql'),
-                    'ls': os.listdir(self.sql_dir)}
+            self.write_server_log(f'delete_database(): database is already empty (os.listdir({self.sql_dir}): {os.listdir(self.sql_dir)})')
+            return {'error': 'Database is already empty'}
 
-        
-        print(f'Deleting tables associated with {self.sig}')
+        self.write_server_log(f'delete_database(): deleting tables associated with {self.sig}')
+        self.write_server_log(f'delete_database(): running query: {query}')
 
         # TODO prompt user before running this query and deleting all tables
         self.db.run_query(query)
         os.remove(f'{self.sql_dir}/drop.sql')
-        return{'query ran': query}
+        return{'query': query}
     
     def clear_directory(self, path):
+        self.write_server_log(f'clearing directory: {path}')
         for root, dirs, files in os.walk(path, topdown=False):
             for file in files:
                 os.remove(os.path.join(root, file))
@@ -328,32 +332,32 @@ class Monitor:
                 os.rmdir(os.path.join(root, dir))
 
     def delete_everything(self):
-        self.stop()
+        stop_log = self.stop()
         drop_log = self.delete_database()
         self.clear_directory(self.sig_dir)
         self.clear_directory(self.pol_dir)
         self.clear_directory(self.events_dir)
         self.clear_directory(self.monitor_logs)
-        return {'deleted everything': 'done'} | drop_log
+        return {'deleted everything': 'done'} | drop_log | stop_log
     
     def stop(self):
-        self.write_server_log('stopping monpoly')
-        # TODO store state
+        self.write_server_log('[stop()] stopping monpoly')
         log = dict()
         if not self.monpoly or self.monpoly.poll():
-            self.write_server_log('(monitor.stop) monpoly is not running')
+            self.write_server_log('[stop()] monpoly is not running')
             return {'error': 'monpoly not running or already stopped'}
 
         if self.monpoly:
             if self.monpoly.stdin:
-                self.write_server_log(f'sending > save_and_exit {self.monitor_logs}/monitor_state <; to monpoly')
-                self.monpoly.stdin.write(f'> save_and_exit {self.monitor_logs}/monitor_state < ;')
+                self.write_server_log(f'[stop()] sending > save_and_exit {self.monitor_state_path} <; to monpoly')
+                self.monpoly.stdin.write(f'> save_and_exit {self.monitor_state_path} < ;')
                 self.monpoly.stdin.flush()
-                self.write_server_log('waiting for response from monpoly')
+                self.write_server_log('[stop()] waiting for response from monpoly')
                 return_code = self.monpoly.wait()
+                self.write_server_log(f'[stop()] monpoly exited with return code: {return_code}, self.monpoly.poll(): {self.monpoly.poll()}, saved state at {self.monitor_state_path}')
                 log |= {'stopped monpoly and stored sate, return code': return_code}
             else:
-                self.write_server_log("can't access stind of monpoly, stopping without saving state")
+                self.write_server_log("[stop()] can't access stind of monpoly, stopping without saving state")
                 self.monpoly.kill()
 
         return {'stopped': 'stopped monpoly'} | log
@@ -367,7 +371,7 @@ class Monitor:
     def get_monpoly_exit_code(self):
         if self.monpoly:
             exit_code = self.monpoly.poll()
-            if exit_code:
+            if exit_code is not None:
                 return exit_code
             else:
                 return 'monpoly still running'
@@ -385,14 +389,16 @@ class Monitor:
             return stdout.read() or 'stdout is empty'
 
 
-    def store_events_in_db(self, events):
+    def store_timepoints_in_db(self, timepoints: list):
         '''
         logs the given events in the database
         '''
         buf = Buffer()
-        for e in events:
-            ts = datetime.fromtimestamp(e['timestamp-int'])
-            for p in e['predicates']:
+        for timepoint in timepoints:
+            if 'skip' in timepoint.keys():
+                continue
+            ts = datetime.fromtimestamp(timepoint['timestamp-int'])
+            for p in timepoint['predicates']:
                 if 'name' not in p.keys():
                     return {'log_events error': 'predicate must have a "name"'}
                 elif 'occurrences' not in p.keys():
@@ -410,32 +416,32 @@ class Monitor:
                         columns = columns,
                         at = ts
                     )
-                    print('added row to buffer')
+                    self.write_server_log(f'store_events_in_db(): added row to buffer: {columns} at {ts}')
         with Sender(self.db.host, self.db.port_influxdb) as sender:
-            print(f'< flushing buffer: {buf} >')
-            self.write_server_log(f'sending buffer {buf} to databas')
+            self.write_server_log(f'sending buffer {buf} to database')
             sender.flush(buf)
 
-        return {'events': events}
+        return {'events': timepoints}
 
-    def send_events_to_monpoly(self, event_str: str):
+    def send_timepoint_to_monpoly(self, event_str: str):
         if self.monpoly:
             if self.monpoly.stdin and self.monpoly.stdout:
-                self.write_server_log(f'sending events to monpoly: {event_str}')
+                self.write_server_log(f'[send_events_to_monpoly({event_str})] sending events to monpoly: {event_str}')
                 self.monpoly.stdin.write(event_str)
                 self.monpoly.stdin.flush()
                 result = ''
                 reached_separator = False
                 while not reached_separator:
-                    self.write_server_log('reading monpoly response')
+                    self.write_server_log(f'[send_events_to_monpoly({event_str})] reading monpoly response')
                     line = self.monpoly.stdout.readline()
-                    self.write_server_log(f'read line from monpoly: {line}')
-                    reached_separator = line.endswith('reached separator')
-                    print(line)
+                    self.write_server_log(f'[send_events_to_monpoly({event_str})] read line from monpoly: {line}')
+                    reached_separator = '## reached separator ##' in line
                     if not reached_separator:
                         result += line
+
                 self.write_monpoly_log(result)
-                return{'success': f'sent "{event_str}" to monpoly', 'result': result}
+                self.write_server_log(f'[send_events_to_monpoly({event_str})] monpoly done - stdout: {result}')
+                return{'success': f'sent "{event_str}" to monpoly', 'output': result}
             else:
                 self.write_server_log(f'could not access stdin or stdout of monpoly (stdout:{mon.monpoly.stdout}, stdin:{mon.monpoly.stdin})')
                 return {'error': 'Error while logging events monpoly stdin is None'}
@@ -444,71 +450,76 @@ class Monitor:
             return {'error': 'Monpoly is not running'}
 
             
-    def check_events(self, events: list) -> tuple[list[str], list[str], list]:
-        self.write_server_log(f'enteres check_events with events: {events}')
-        timestamp_list = []
-        faulty_events = []
-        events_list_cleaned =[]
-        for event in events:
-            time_stamp_int = event['timestamp-int']
-            event_cleaned = {'timestamp-int': time_stamp_int, 'predicates': []}
-            time_stamp_str = datetime.fromtimestamp(time_stamp_int).strftime(log_events.timestamp_fmt)
-            monpoly_string = f'@{time_stamp_int} '
-            for predicate in event['predicates']:
+    def create_log_strings(self, timepoints: list) -> list:
+        '''
+        this function takes a list of event dictionaries
+        it adds log strings (to be sent to monpoly) to for 
+        each timestamp and returns the extended list of 
+        dictionaries
+        '''
+        self.write_server_log(f'create_log_strings({timepoints})')
+        for timepoint in timepoints:
+            timestamp = timepoint['timestamp-int']
+            monpoly_string = f'@{timestamp} '
+
+            for predicate in timepoint['predicates']:
                 if 'name' not in predicate.keys():
-                    faulty_events.append(f'skipped predicate {predicate} at timestamp {time_stamp_str} because it has no name')
+                    timepoint['skip'] = f'predicate {predicate} has no name'
+                    self.write_server_log(f'create_log_strings(): predicate ({predicate}) with no name at timestamp: {timestamp}')
+                    break
                 else:
                     name = predicate['name']
-                    occurrences_cleaned = []
                     for occurrence in predicate['occurrences']:
-                        well_formed_predicate = self.check_predicate(name, occurrence)
-                        if not well_formed_predicate['result']:
-                            faulty_events.append(f'skipped predicate {name} {occurrence} at timestamp {time_stamp_str} because: {well_formed_predicate["message"]}')
-                        else:
-                            predicate_str = f'{name} {tuple(occurrence)} '
-                            monpoly_string += predicate_str
-                            occurrences_cleaned.append(occurrence)
-                    event_cleaned['predicates'].append({'name': name, 'occurrences': occurrences_cleaned})
-            monpoly_string += ';'
-            timestamp_list.append(monpoly_string)
-            events_list_cleaned.append(event_cleaned)
+                        predicate_str = f'{name} {self.tuple_str_from_list(occurrence)} '
+                        monpoly_string += predicate_str
+            monpoly_string += ';\n'
+            timepoint['monpoly-string'] = monpoly_string
+            self.write_server_log(f'create_log_strings(): created monpoly string: {monpoly_string}')
+        return timepoints
 
-        return timestamp_list, faulty_events, events_list_cleaned
-
+    def tuple_str_from_list(self, l: list) -> str:
+        l_str = [str(x) for x in l]
+        return '(' + ', '.join(l_str) + ')'
     
-    def log_events(self, events_json: str):
+    def log_timepoints(self, timepoints_json: str):
         # get current time at this point, so all events with a missing timestamp are logged with the same timestamp
-        self.write_server_log(f'started logging events: {events_json}')
+        self.write_server_log(f'[log_timepoints()] started logging events: {timepoints_json}')
         timestamp_now = datetime.now()
-        with open(events_json) as f:
+        with open(timepoints_json) as f:
             try:
-                events = json.load(f)
-                events = [{'timestamp-int': log_events.get_timestamp(e, timestamp_now)} | e for e in events]
-                list.sort(events, key=lambda e: e['timestamp-int'])
-                time_stamp_str_list, faulty_predicates, events_cleaned = self.check_events(events)
-                if faulty_predicates:
-                    self.write_server_log(f'faulty predicates will be skipped: {faulty_predicates}')
-                monpoly_output_str = ''
-                for time_stamp_str in time_stamp_str_list:
-                    monpoly_response = self.send_events_to_monpoly(time_stamp_str)
-                    if 'error' in monpoly_response.keys():
-                        self.write_server_log(f'error while sending event to monpoly: {monpoly_response}')
-                        return monpoly_response
-                    elif 'result' in monpoly_response.keys():
-                        self.write_server_log(f'received monpoly response: {monpoly_response["result"]}')
-                        monpoly_output_str += str(monpoly_response['result'])
+                timepoints = json.load(f)
+                timepoints = [{'timestamp-int': log_events.get_timestamp(e, timestamp_now)} | e for e in timepoints]
+                list.sort(timepoints, key=lambda e: e['timestamp-int'])
+                timepoints = self.create_log_strings(timepoints)
+
+                skip_log = {}
+                for timepoint in timepoints:
+                    if 'skip' in timepoint.keys():
+                        self.write_server_log(f'[log_timepoints()] skipping event: {timepoint}, because: {timepoint["skip"]}')
+                        skip_log |= {timepoint['timestamp-int']: timepoint['skip']}
+                        continue
+                    monpoly_output = self.send_timepoint_to_monpoly(timepoint['monpoly-string'])
+                    if 'error' in monpoly_output.keys():
+                        return {'error': f'error while logging timepoints: {monpoly_output["error"]}'}
+                    output = monpoly_output['output']
+                    if 'WARNING: Skipping out of order timestamp' in output or 'ERROR' in output:
+                        #TODO pass along to user that this timestamp was skipped
+                        # and make sure it isn't logged in the database
+                        timepoint['skip'] = output
+                        skip_log |= {timepoint['timestamp-int']: timepoint['skip']}
+
+                
                     
-                db_response = self.store_events_in_db(events_cleaned)
+                db_response = self.store_timepoints_in_db(timepoints)
                 self.write_server_log(f'stored events in db: {db_response}')
 
                 return {'success': 'logged events',
-                        'monpoly_output': monpoly_output_str,
                         'db_response': db_response,
-                        'skipped/faulty predicates (check log for more detail)': faulty_predicates,
-                        'logged events': events_cleaned}
+                        'skipped timepoints': skip_log}
 
             except ValueError as e:
                 print(f'error parsing json file: {e}')
                 self.write_server_log(f'error parsing json file: {e}')
                 self.clear_directory(self.events_dir)
                 return {'error': f'Error while parsing events JSON {e}'}
+
