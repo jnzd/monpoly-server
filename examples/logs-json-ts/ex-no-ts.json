@@ -1,0 +1,51 @@
+[
+    {
+        "predicates": [
+            {
+                "name": "P",
+                "occurrences": [
+                    [1]
+                ]
+            }
+        ]
+    },
+    {
+        "predicates": [
+            {
+                "name": "P",
+                "occurrences": [
+                    [1], [4]
+                ]
+            }
+        ]
+    },
+    {
+        "predicates": [
+            {
+                "name": "Q",
+                "occurrences": [
+                    [2,"b"]
+                ]
+            }
+        ]
+    },
+    {
+        "predicates": []
+    },
+    {
+        "predicates": [
+            {
+                "name": "P",
+                "occurrences": [
+                    [1]
+                ]
+            },
+            {
+                "name": "Q",
+                "occurrences": [
+                    [1,"a"]
+                ]
+            }
+        ]
+    }
+]

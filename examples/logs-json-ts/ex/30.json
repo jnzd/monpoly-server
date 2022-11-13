@@ -1,0 +1,20 @@
+[
+    {
+        "timestamp": "1970-01-01 00:00:30.0",
+        "predicates": [
+            {
+                "name": "P",
+                "occurrences": [
+                    [1]
+                ]
+            },
+            {
+                "name": "Q",
+                "occurrences": [
+                    [1,"a"]
+                ]
+            }
+        ]
+    }
+        
+]
