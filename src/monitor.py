@@ -135,6 +135,29 @@ class Monitor:
                 }
         return config
     
+    def restore_db(self, conf):
+        if 'database' in conf.keys():
+            self.db = DbHelper(conf['database'])
+            self.write_server_log(f'Restored database connection: {self.db.get_config()}')
+        else:
+            self.db = DbHelper()
+            self.write_server_log(f'established database connection: {self.db.get_config()}')
+        
+    def restart_monpoly(self, conf):
+        if 'monpoly_started' in conf.keys() and bool(conf['monpoly_started']):
+            if not self.sig:
+                self.write_server_log('faulty config, cannot restart monpoly, because signature is not set')
+            if not self.policy:
+                self.write_server_log('faulty config, cannot restart monpoly, because policy is not set')
+                
+            if 'monpoly_state' in conf.keys():
+                monpoly_state = conf['monpoly_state']
+                abs_path = os.path.abspath(monpoly_state)
+                self.monpoly = self.restart_monpoly(abs_path)
+            else:
+                #TODO start new monpoly process and rerun all events
+                pass
+    
     def restore_state(self):
         if os.path.exists(self.conf_path):
             with open(self.conf_path, 'r') as conf_json:
@@ -144,26 +167,8 @@ class Monitor:
                 self.policy = conf['policy']
                 self.policy_negate = bool(conf['policy_negate'])
 
-                if 'database' in conf.keys():
-                    self.db = DbHelper(conf['database'])
-                    self.write_server_log(f'Restored database connection: {self.db.get_config()}')
-                else:
-                    self.db = DbHelper()
-                    self.write_server_log(f'established database connection: {self.db.get_config()}')
-
-                if 'monpoly_started' in conf.keys() and bool(conf['monpoly_started']):
-                    if not self.sig:
-                        self.write_server_log('faulty config, cannot restart monpoly, because signature is not set')
-                    if not self.policy:
-                        self.write_server_log('faulty config, cannot restart monpoly, because policy is not set')
-                        
-                    if 'monpoly_state' in conf.keys():
-                        monpoly_state = conf['monpoly_state']
-                        abs_path = os.path.abspath(monpoly_state)
-                        self.monpoly = self.restart_monpoly(abs_path)
-                    else:
-                        #TODO start new monpoly process and rerun all events
-                        pass
+                self.restore_db(conf)
+                self.restart_monpoly(conf)
                 
     
     def write_config(self):
