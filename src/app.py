@@ -19,13 +19,16 @@ mon = Monitor()
 # TODO add method to send database credentials
 # for now the defaults are used, when questdb is running locally
 
+def string_to_html(text):
+    return text.replace('\n', '<br>')
+
 @app.route('/', methods=['GET'])
 def index():
     content = f''' 
         <h1>Monpoly Backend</h1>
         <p>
-        You are monitoring the following policy: {mon.get_policy()} <br>
-        With the signature: {mon.get_signature()}  
+        <b>You are monitoring the following policy:</b><br> {string_to_html(mon.get_policy())} <br>
+        <b>With the signature:</b><br> {string_to_html(mon.get_signature())}  
         </p>
         <h2>Database schema</h2>
         <p>
@@ -35,9 +38,9 @@ def index():
         <p> {mon.get_monpoly_pid()}: {mon.monpoly.args if mon.monpoly and mon.monpoly.args else ""} </p>
         <p> exit code: {mon.get_monpoly_exit_code()} </p>
         <h3>Monitorability</h3>
-        <p> {mon.get_monitorability_log()} </p>
+        <p> {string_to_html(mon.get_monitorability_log())} </p>
         <h2>Monitor log</h2>
-        <p> {mon.get_stdout()} <p>
+        <p> {string_to_html(mon.get_stdout())} <p>
     '''
     return content
 

@@ -364,7 +364,7 @@ class Monitor:
 
     def get_stdout(self):
         if not os.path.exists(self.monpoly_log):
-            return {'error': 'stdout log does not exist'}
+            return 'error stdout log does not exist'
         with open(self.monpoly_log, 'r') as stdout:
             return stdout.read() or 'stdout is empty'
 
