@@ -33,6 +33,8 @@ class Monitor:
         self.sig_json_path = f'{self.sig_dir}/sig.json'
         self.monpoly_log = f'{self.monitor_logs}/monpoly_stdout.log'
         self.monitorability_log = f'{self.monitor_logs}/monitorability.log'
+        self.ts_query_create = "CREATE TABLE ts(time_stamp TIMESTAMP) timestamp(time_stamp) PARTITION BY DAY;"
+        self.ts_query_drop = "DROP TABLE ts;"
         self.make_dirs(self.sig_dir)
         self.make_dirs(self.pol_dir)
         self.make_dirs(self.sql_dir)
@@ -202,6 +204,7 @@ class Monitor:
         cmd = ['monpoly', '-sql_drop', sig]
         process = subprocess.run(cmd, capture_output=True, text=True)
         query_drop = process.stdout
+        query_drop += self.ts_query_drop
 
         if verbose: print(f'Generated drop query: {query_drop}')
 
@@ -224,7 +227,8 @@ class Monitor:
         process = subprocess.run(cmd, capture_output=True, text=True)
         query_create = process.stdout
         self.db.run_query(query_create)
-        return {'created tables': query_create}
+        self.db.run_query(self.ts_query_create)
+        return {'created tables': query_create + self.ts_query_create}
 
     def spawn_monpoly(self, sig, pol, restart: str=''):
         cmd = ['monpoly', 
@@ -259,11 +263,9 @@ class Monitor:
             return 'monpoly not started, because it is already running'
         self.write_server_log('[launch()] launching monpoly')
         if not self.signature_set():
-        # if not self.sig:
             self.write_server_log('[launch()] cannot launch monpoly, because signature is not set')
             return 'no signature provided'
         elif not self.policy_set():
-        # elif not self.policy:
             self.write_server_log('[launch()] cannot launch monpoly, because policy is not set')
             return 'no policy provided'
 
@@ -277,7 +279,6 @@ class Monitor:
             self.monpoly = self.spawn_monpoly(self.sig, self.policy, restart=self.monitor_state_path)
             return 'restarted monpoly'
             
-        # self.init_database(self.sig)
         self.monpoly = self.spawn_monpoly(self.sig, self.policy)
         self.write_server_log('launched monpoly')
         return f'successfully launched monpoly, pid: {self.get_monpoly_pid()}, args: {self.monpoly.args}'
@@ -311,14 +312,20 @@ class Monitor:
             for dir in dirs:
                 os.rmdir(os.path.join(root, dir))
 
+    def delete_config(self):
+        if os.path.exists(self.conf_path):
+            os.remove(self.conf_path)
+        return {'config': f'deleted {self.conf_path}'}
+
     def delete_everything(self):
         stop_log = self.stop()
         drop_log = self.delete_database()
+        conf_log = self.delete_config()
         self.clear_directory(self.sig_dir)
         self.clear_directory(self.pol_dir)
         self.clear_directory(self.events_dir)
         self.clear_directory(self.monitor_logs)
-        return {'deleted everything': 'done'} | drop_log | stop_log
+        return {'deleted everything': 'done'} | drop_log | stop_log | conf_log
     
     def stop(self):
         self.write_server_log('[stop()] stopping monpoly')
@@ -378,6 +385,8 @@ class Monitor:
             if 'skip' in timepoint.keys():
                 continue
             ts = datetime.fromtimestamp(timepoint['timestamp-int'])
+            buf.row('ts', symbols=None, columns={'time_stamp':ts}, at=ts)
+            self.write_server_log(f'store_events_in_db(): added {ts} to ts table in buffer')
             for p in timepoint['predicates']:
                 if 'name' not in p.keys():
                     return {'log_events error': 'predicate must have a "name"'}
@@ -511,9 +520,11 @@ class Monitor:
                 for predicate in signature:
                     names.append(predicate['name'])
         
+        names.append('ts')
         results = []
         for table_name in names:
             self.write_server_log(f'[get_events()] getting events for table: {table_name}')
             response = self.db.run_query(f'SELECT * FROM {table_name}', select=True)
+            self.write_server_log(f'[get_events()] got response from db: {response}')
             results.append({table_name: response})
         return results
