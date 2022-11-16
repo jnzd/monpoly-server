@@ -110,7 +110,7 @@ def stop_monitor():
     return mon.stop()
 
 @app.route('/reset-everything', methods=['GET'])
-def drop_tables():
+def reset_monitor():
     delete_message = mon.delete_everything()
     return delete_message
 
