@@ -8,31 +8,35 @@ from questdb.ingress import Sender
 from questdb.ingress import Buffer
 
 config_dir       = os.path.abspath('./monitor-data/')
-signature_dir    = f'{config_dir}/signature'
-policy_dir       = f'{config_dir}/policies'
-sql_dir          = f'{config_dir}/sql'
-events_dir       = f'{config_dir}/events'
-monitor_logs_dir = f'{config_dir}/monitor-logs'
+signature_dir    = os.path.join(config_dir, 'signature')
+policy_dir       = os.path.join(config_dir, 'policies')
+sql_dir          = os.path.join(config_dir, 'sql')
+events_dir       = os.path.join(config_dir, 'events')
+monitor_logs_dir = os.path.join(config_dir, 'monitor-logs')
 
+log_timestamp_format = "%Y-%m-%d %H:%M:%S"
+# %a matches the first 3 letters of the weekday
+# %b matches the first 3 letters of the month
+quest_db_response_timestamp_fmt = '%a, %d %b %Y %H:%M:%S GMT'
 
 class Monitor:
     def __init__(self):
         self.sig = ''
         self.policy = ''
         self.policy_negate = False
-        self.conf_path = f'{config_dir}/conf.json'
-        self.log_path = f'{config_dir}/log.txt'
+        self.conf_path = os.path.join(config_dir, 'conf.json')
+        self.log_path = os.path.join(config_dir, 'log.txt')
         self.db = DbHelper()
         self.sig_dir = os.path.abspath(signature_dir)
         self.pol_dir = os.path.abspath(policy_dir)
         self.sql_dir = os.path.abspath(sql_dir)
-        self.sql_drop = f'{self.sql_dir}/drop.sql'
+        self.sql_drop = os.path.join(self.sql_dir, 'drop.sql')
         self.events_dir = os.path.abspath(events_dir)
         self.monitor_logs = os.path.abspath(monitor_logs_dir)
-        self.monitor_state_path = f'{self.monitor_logs}/state.txt'
-        self.sig_json_path = f'{self.sig_dir}/sig.json'
-        self.monpoly_log = f'{self.monitor_logs}/monpoly_stdout.log'
-        self.monitorability_log = f'{self.monitor_logs}/monitorability.log'
+        self.monitor_state_path = os.path.join(self.monitor_logs, 'state.txt')
+        self.sig_json_path = os.path.join(self.sig_dir, 'sig.json')
+        self.monpoly_log = os.path.join(self.monitor_logs, 'monpoly_stdout.log')
+        self.monitorability_log = os.path.join(self.monitor_logs, 'monitorability.log')
         self.ts_query_create = "CREATE TABLE ts(time_stamp TIMESTAMP) timestamp(time_stamp) PARTITION BY DAY;"
         self.ts_query_drop = "DROP TABLE ts;"
         self.make_dirs(self.sig_dir)
@@ -45,7 +49,7 @@ class Monitor:
         self.write_config()
 
     def write_server_log(self, msg: str):
-        time_stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        time_stamp = datetime.now().strftime(log_timestamp_format)
         with open(self.log_path, 'a') as log:
             log.write(f'[{time_stamp}] {msg}\n')
 
@@ -154,7 +158,7 @@ class Monitor:
             self.write_server_log(f'wrote config: {conf_string}')
 
     def set_policy(self, policy, negate: bool=False):
-        policy_location = f'{self.pol_dir}/policy'
+        policy_location = os.path.join(self.pol_dir, policy)
         # as long as monpoly isn't running yet, the policy can still be changed
         # TODO allow for policy change later on
         if os.path.exists(policy_location) and self.monpoly:
@@ -170,7 +174,7 @@ class Monitor:
         return {'set policy': policy}
 
     def set_signature(self, sig):
-        sig_location = f'{self.sig_dir}/sig'
+        sig_location = os.path.join(self.sig_dir, 'sig')
         # as long as monpoly isn't running yet, the policy can still be changed
         if os.path.exists(sig_location):
             if self.monpoly:
@@ -496,9 +500,6 @@ class Monitor:
                         # and make sure it isn't logged in the database
                         timepoint['skip'] = output
                         skip_log |= {timepoint['timestamp-int']: timepoint['skip']}
-
-                
-                    
                 db_response = self.store_timepoints_in_db(timepoints)
                 self.write_server_log(f'stored events in db: {db_response}')
 
