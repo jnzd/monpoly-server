@@ -1,11 +1,11 @@
-from db_helper import DbHelper
+import json
 import os
 import subprocess
-import json
 from datetime import datetime
-import log_events
-from questdb.ingress import Sender
-from questdb.ingress import Buffer
+
+from questdb.ingress import Buffer, Sender
+
+from db_helper import DbHelper
 
 config_dir       = os.path.abspath('./monitor-data/')
 signature_dir    = os.path.join(config_dir, 'signature')
@@ -37,7 +37,11 @@ class Monitor:
         self.sig_json_path = os.path.join(self.sig_dir, 'sig.json')
         self.monpoly_log = os.path.join(self.monitor_logs, 'monpoly_stdout.log')
         self.monitorability_log = os.path.join(self.monitor_logs, 'monitorability.log')
-        self.ts_query_create = "CREATE TABLE ts(time_stamp TIMESTAMP) timestamp(time_stamp) PARTITION BY DAY;"
+        # second column isn't necessary for the functionality of the backend,
+        # but questdb doesn't currently (2022-11-17) support tables with only
+        # timestamp column:
+        # https://github.com/questdb/questdb/issues/2691
+        self.ts_query_create = "CREATE TABLE ts(dummy_column BYTE,time_stamp TIMESTAMP) timestamp(time_stamp) PARTITION BY DAY;"
         self.ts_query_drop = "DROP TABLE ts;"
         self.make_dirs(self.sig_dir)
         self.make_dirs(self.pol_dir)
@@ -204,23 +208,15 @@ class Monitor:
         return self.get_json_signature()
         
 
-    def get_destruct_query(self, sig, verbose: bool = True):
+    def get_destruct_query(self, sig):
         cmd = ['monpoly', '-sql_drop', sig]
         process = subprocess.run(cmd, capture_output=True, text=True)
         query_drop = process.stdout
         query_drop += self.ts_query_drop
-
-        if verbose: print(f'Generated drop query: {query_drop}')
-
-        self.sql_drop_tables = query_drop
-        location = self.sql_drop
-
-        if verbose: print(f'Writing drop query to {location}')
-
-        with open(location, 'w') as drop_file:
+        self.write_server_log(f'[get_destruct_query()] Generated drop query: {query_drop}')
+        with open(self.sql_drop, 'w') as drop_file:
             drop_file.write(query_drop)
-            drop_file.close()
-        return {'drop query': query_drop, 'drop file': location}
+        return {'drop query': query_drop, 'drop file': self.sql_drop}
 
     def init_database(self, sig, verbose: bool = True):
         '''
@@ -293,7 +289,7 @@ class Monitor:
         '''
         query = ''
         if not self.db_is_empty():
-            with open(f'{self.sql_dir}/drop.sql', 'r') as drop_file:
+            with open(self.sql_drop, 'r') as drop_file:
                 query = drop_file.read()
                 drop_file.close()
         elif self.db_is_empty():
@@ -305,7 +301,7 @@ class Monitor:
 
         # TODO prompt user before running this query and deleting all tables
         self.db.run_query(query)
-        os.remove(f'{self.sql_dir}/drop.sql')
+        os.remove(self.sql_drop)
         return{'query': query}
     
     def clear_directory(self, path):
@@ -389,7 +385,10 @@ class Monitor:
             if 'skip' in timepoint.keys():
                 continue
             ts = datetime.fromtimestamp(timepoint['timestamp-int'])
-            buf.row('ts', symbols=None, columns={'time_stamp':ts}, at=ts)
+            # dummy_column is necessary, because questdb doesn't support tables
+            # with only one timestamp column (in combination with the influxDB Line Protocol)
+            # https://github.com/questdb/questdb/issues/2691
+            buf.row('ts', symbols=None, columns={'dummy_column':0}, at=ts)
             self.write_server_log(f'store_events_in_db(): added {ts} to ts table in buffer')
             for p in timepoint['predicates']:
                 if 'name' not in p.keys():
@@ -474,6 +473,20 @@ class Monitor:
         l_str = [str(x) for x in l]
         return '(' + ', '.join(l_str) + ')'
     
+    def get_timestamp(self, event: dict, timestamp_now: datetime) -> int:
+        '''
+        This method checks if the event has a timestamp
+        it sets it to the current time if it doesn't
+        It returns a timestamp in seconds since 1970-01-01 00:00:00 
+        (in monpoly/scr/formula_parser.mly:timeunits it can be seen that 
+        seconds are the smallest and default time unit in monpoly)
+        '''
+        if 'timestamp' in event.keys():
+            ts = datetime.strptime(event['timestamp'], log_timestamp_format)
+        else:
+            ts = timestamp_now
+        return int(ts.timestamp())
+    
     def log_timepoints(self, timepoints_json: str):
         # get current time at this point, so all events with a missing timestamp are logged with the same timestamp
         self.write_server_log(f'[log_timepoints()] started logging events: {timepoints_json}')
@@ -481,7 +494,7 @@ class Monitor:
         with open(timepoints_json) as f:
             try:
                 timepoints = json.load(f)
-                timepoints = [{'timestamp-int': log_events.get_timestamp(e, timestamp_now)} | e for e in timepoints]
+                timepoints = [{'timestamp-int': self.get_timestamp(e, timestamp_now)} | e for e in timepoints]
                 list.sort(timepoints, key=lambda e: e['timestamp-int'])
                 timepoints = self.create_log_strings(timepoints)
 
@@ -496,8 +509,6 @@ class Monitor:
                         return {'error': f'error while logging timepoints: {monpoly_output["error"]}'}
                     output = monpoly_output['output']
                     if 'WARNING: Skipping out of order timestamp' in output or 'ERROR' in output:
-                        #TODO pass along to user that this timestamp was skipped
-                        # and make sure it isn't logged in the database
                         timepoint['skip'] = output
                         skip_log |= {timepoint['timestamp-int']: timepoint['skip']}
                 db_response = self.store_timepoints_in_db(timepoints)
@@ -512,6 +523,22 @@ class Monitor:
                 self.write_server_log(f'error parsing json file: {e}')
                 self.clear_directory(self.events_dir)
                 return {'error': f'Error while parsing events JSON {e}'}
+
+    def db_response_to_timepoints(self, db_response: list) -> list:
+        db_response_dict = {k: v for d in db_response for k, v in d.items()}
+        timestamps_list_of_list = db_response_dict['ts']
+        # time_stamps_strs = [x for l in timestamps_list_of_list for x in l]
+        # time_stamps = [datetime.strptime(x,quest_db_response_timestamp_fmt) for x in time_stamps_strs]
+        timestamps = [x for l in timestamps_list_of_list for x in l]
+        result = []
+        for ts in timestamps:
+            ts_int = int(ts.timestamp())
+            ts_dict = {'timestamp-int': ts_int, 'timestamp': ts.strftime(log_timestamp_format), 'predicates': []}
+            result.append(ts_dict)
+
+        return result
+        
+        
 
     def get_events(self):
         names = []
@@ -528,4 +555,6 @@ class Monitor:
             response = self.db.run_query(f'SELECT * FROM {table_name}', select=True)
             self.write_server_log(f'[get_events()] got response from db: {response}')
             results.append({table_name: response})
+        time_points_dict_list = self.db_response_to_timepoints(results)
         return results
+        # return results
