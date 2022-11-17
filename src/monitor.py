@@ -526,22 +526,39 @@ class Monitor:
                 return {'error': f'Error while parsing events JSON {e}'}
 
     def db_response_to_timepoints(self, db_response: list) -> list:
+        self.write_server_log(f'[db_response_to_timepoints()] converting db response to timepoints')
         db_response_dict = {k: v for d in db_response for k, v in d.items()}
-        timestamps_list_of_list = db_response_dict['ts']
-        # time_stamps_strs = [x for l in timestamps_list_of_list for x in l]
-        # time_stamps = [datetime.strptime(x,quest_db_response_timestamp_fmt) for x in time_stamps_strs]
-        timestamps = [x for l in timestamps_list_of_list for x in l]
-        result = []
+        timestamps = {x[1] for x in db_response_dict['ts']}
+        result = dict()
         for ts in timestamps:
             ts_int = int(ts.timestamp())
-            ts_dict = {'timestamp-int': ts_int, 'timestamp': ts.strftime(log_timestamp_format), 'predicates': []}
-            result.append(ts_dict)
+            ts_dict = {'timestamp-int': ts_int, 'timestamp': ts.strftime(log_timestamp_format), 'predicates': dict()}
+            result[ts_int] = ts_dict
+
+        for predicate_name in db_response_dict.keys():
+            if predicate_name == 'ts':
+                continue
+            for occurrence in db_response_dict[predicate_name]:
+                ts = int(occurrence[-1].timestamp())
+                if predicate_name in result[ts]['predicates'].keys():
+                    result[ts]['predicates'][predicate_name].append(occurrence[:-1])
+                else:
+                    result[ts]['predicates'][predicate_name] = [occurrence[:-1]]
+
+        result = [v for _, v in result.items()]
+        for t in result:
+            t['predicates'] = [{'name': k, 'occurrences': v} for k, v in t['predicates'].items()]
+        result.sort(key=lambda e: e['timestamp-int'])
 
         return result
         
         
 
     def get_events(self):
+        '''
+        returns all events in the database in the same json format
+        that this backend takes as input
+        '''
         names = []
         if os.path.exists(self.sig_json_path):
             with open(self.sig_json_path) as f:
@@ -556,6 +573,5 @@ class Monitor:
             response = self.db.run_query(f'SELECT * FROM {table_name}', select=True)
             self.write_server_log(f'[get_events()] got response from db: {response}')
             results.append({table_name: response})
-        time_points_dict_list = self.db_response_to_timepoints(results)
-        return results
-        # return results
+        monpoly_log = self.db_response_to_timepoints(results)
+        return monpoly_log
