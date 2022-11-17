@@ -41,6 +41,7 @@ class Monitor:
         # but questdb doesn't currently (2022-11-17) support tables with only
         # timestamp column:
         # https://github.com/questdb/questdb/issues/2691
+        # TODO ? Are predicates with no attributes possible? this same bug would come up in this case
         self.ts_query_create = "CREATE TABLE ts(dummy_column BYTE,time_stamp TIMESTAMP) timestamp(time_stamp) PARTITION BY DAY;"
         self.ts_query_drop = "DROP TABLE ts;"
         self.make_dirs(self.sig_dir)
