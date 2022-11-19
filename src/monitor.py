@@ -390,7 +390,7 @@ class Monitor:
             # with only one timestamp column (in combination with the influxDB Line Protocol)
             # https://github.com/questdb/questdb/issues/2691
             buf.row('ts', symbols=None, columns={'dummy_column':0}, at=ts)
-            self.write_server_log(f'store_events_in_db(): added {ts} to ts table in buffer')
+            self.write_server_log(f'[store_timepoints_in_db()]: added {ts} to ts table in buffer')
             for p in timepoint['predicates']:
                 if 'name' not in p.keys():
                     return {'log_events error': 'predicate must have a "name"'}
@@ -399,7 +399,7 @@ class Monitor:
                     break
                 name = p['name']
                 for occ in p['occurrences']:
-                    columns = dict()
+                    columns = {'dummy_column': 0}
                     for i, o in enumerate(occ):
                         # column names in questdb go from x1 to xn
                         columns |= {f'x{i+1}': o}
@@ -540,10 +540,12 @@ class Monitor:
                 continue
             for occurrence in db_response_dict[predicate_name]:
                 ts = int(occurrence[-1].timestamp())
+                # the first value in `occurence` is from `dummy_column`
+                # the last value in `occurence` is the timestamp
                 if predicate_name in result[ts]['predicates'].keys():
-                    result[ts]['predicates'][predicate_name].append(occurrence[:-1])
+                    result[ts]['predicates'][predicate_name].append(occurrence[1:-1])
                 else:
-                    result[ts]['predicates'][predicate_name] = [occurrence[:-1]]
+                    result[ts]['predicates'][predicate_name] = [occurrence[1:-1]]
 
         result = [v for _, v in result.items()]
         for t in result:
