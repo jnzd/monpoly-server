@@ -6,7 +6,8 @@ RUN apk add --no-cache python3 py3-pip \
     && pip3 install --upgrade pip \
     # && python3 -m .venv-monpoly \
     # && source .venv-monpoly/bin/activate \
-    && pip3 install questdb psycopg2-binary flask
+    && pip3 install questdb psycopg2-binary flask \
+    && pip install python-dateutil
 
 ENV FLASK_APP=app.py
 ENV FLASK_RUN_HOST=0.0.0.0
