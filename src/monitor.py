@@ -3,6 +3,7 @@ import os
 import subprocess
 from datetime import datetime
 from dateutil import parser
+from dateutil.parser import ParserError
 
 from questdb.ingress import Buffer, Sender
 

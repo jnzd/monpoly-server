@@ -3,6 +3,7 @@ from monitor import Monitor
 from werkzeug.utils import secure_filename
 import os
 from dateutil import parser
+from dateutil.parser import ParserError
 
 app = Flask(__name__, static_folder='./static')
 
