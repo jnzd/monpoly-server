@@ -576,8 +576,6 @@ class Monitor:
                     names.append(predicate['name'])
 
         if start_date is not None and end_date is not None:
-            start_date = datetime.strptime(start_date, log_timestamp_format)
-            end_date = datetime.strptime(end_date, log_timestamp_format)
             # BETWEEN is inclusive
             query_suffix = f"WHERE time_stamp BETWEEN '{start_date}' AND '{end_date}'"
         elif start_date is not None:
