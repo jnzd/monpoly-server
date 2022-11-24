@@ -2,6 +2,7 @@ from flask import Flask, request, flash, redirect
 from monitor import Monitor
 from werkzeug.utils import secure_filename
 import os
+from dateutil import parser
 
 app = Flask(__name__, static_folder='./static')
 
@@ -122,6 +123,7 @@ def log():
     if 'events' not in request.files:
         flash('No events sent')
         return {'message': 'no events provided, for curl use `-F` and not `-d`'}
+
     events_file = request.files['events']
     if events_file == '':
         flash('No selected file')
@@ -135,7 +137,21 @@ def log():
 
 @app.route('/get-events', methods=['GET'])
 def get_events():
-    return mon.get_events()
+    start_date = None
+    if 'start' in request.form:
+        try:
+            start_date = parser.parse(request.form['start'])
+        except ParserError:
+            return {'error': f'invalid end date: {request.form["start"]}'}
+
+    end_date = None
+    if 'end' in request.form:
+        try:
+            end_date = parser.parse(request.form['end'])
+        except ParserError:
+            return {'error': f'invalid end date {request.form["end"]}'}
+
+    return mon.get_events(start_date=start_date, end_date=end_date)
         
 
     

@@ -488,6 +488,7 @@ class Monitor:
                 ts = parser.parse(event['timestamp'])
             except PasrserError:
                 # TODO: is this desirable or should this timepoint be ignored and skipped?
+                # could return -1 and later check if 'timestamp-int' is -1
                 ts = timestamp_now
         else:
             ts = timestamp_now
@@ -577,13 +578,11 @@ class Monitor:
             start_date = datetime.strptime(start_date, log_timestamp_format)
             end_date = datetime.strptime(end_date, log_timestamp_format)
             # BETWEEN is inclusive
-            query_suffix = f'WHERE time_stamp BETWEEN "{start_date}" AND "{end_date}"'
+            query_suffix = f"WHERE time_stamp BETWEEN '{start_date}' AND '{end_date}'"
         elif start_date is not None:
-            start_date = datetime.strptime(start_date, log_timestamp_format)
-            query_suffix = f'WHERE time_stamp >= "{start_date}"'
+            query_suffix = f"WHERE time_stamp >= '{start_date}'"
         elif end_date is not None:
-            end_date = datetime.strptime(end_date, log_timestamp_format)
-            query_suffix = f'WHERE time_stamp <= "{end_date}"'
+            query_suffix = f"WHERE time_stamp <= '{end_date}'"
         else:
             query_suffix = ''
                     
