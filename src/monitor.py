@@ -2,6 +2,7 @@ import json
 import os
 import subprocess
 from datetime import datetime
+from dateutil import parser
 
 from questdb.ingress import Buffer, Sender
 
@@ -483,7 +484,11 @@ class Monitor:
         seconds are the smallest and default time unit in monpoly)
         '''
         if 'timestamp' in event.keys():
-            ts = datetime.strptime(event['timestamp'], log_timestamp_format)
+            try:
+                ts = parser.parse(event['timestamp'])
+            except PasrserError:
+                # TODO: is this desirable or should this timepoint be ignored and skipped?
+                ts = timestamp_now
         else:
             ts = timestamp_now
         return int(ts.timestamp())
@@ -556,7 +561,7 @@ class Monitor:
         
         
 
-    def get_events(self):
+    def get_events(self, start_date=None, end_date=None) -> list:
         '''
         returns all events in the database in the same json format
         that this backend takes as input
@@ -567,12 +572,26 @@ class Monitor:
                 signature = json.load(f)
                 for predicate in signature:
                     names.append(predicate['name'])
-        
+
+        if start_date is not None and end_date is not None:
+            start_date = datetime.strptime(start_date, log_timestamp_format)
+            end_date = datetime.strptime(end_date, log_timestamp_format)
+            # BETWEEN is inclusive
+            query_suffix = f'WHERE time_stamp BETWEEN "{start_date}" AND "{end_date}"'
+        elif start_date is not None:
+            start_date = datetime.strptime(start_date, log_timestamp_format)
+            query_suffix = f'WHERE time_stamp >= "{start_date}"'
+        elif end_date is not None:
+            end_date = datetime.strptime(end_date, log_timestamp_format)
+            query_suffix = f'WHERE time_stamp <= "{end_date}"'
+        else:
+            query_suffix = ''
+                    
         names.append('ts')
         results = []
         for table_name in names:
             self.write_server_log(f'[get_events()] getting events for table: {table_name}')
-            response = self.db.run_query(f'SELECT * FROM {table_name}', select=True)
+            response = self.db.run_query(f'SELECT * FROM {table_name} {query_suffix};', select=True)
             self.write_server_log(f'[get_events()] got response from db: {response}')
             results.append({table_name: response})
         monpoly_log = self.db_response_to_timepoints(results)
