@@ -64,7 +64,7 @@ def set_policy():
     if pol_file == '':
         flash('No selected file')
         return {'message': 'filename can\'t be empty',
-                'policy (POST-empty-name)': mon.get_policy()}
+                'policy': mon.get_policy()}
     else:
         filename = secure_filename(pol_file.filename)  # type: ignore
         path = os.path.join(mon.pol_dir, filename)
