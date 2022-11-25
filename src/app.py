@@ -4,19 +4,33 @@ from werkzeug.utils import secure_filename
 import os
 from dateutil import parser
 from dateutil.parser import ParserError
+import atexit
 
 app = Flask(__name__, static_folder='./static')
-
-@app.before_first_request
-def before_first_request():
-    log = mon.restore_state()
-    print(log)
 
 # TODO make this actually secure
 app.secret_key = 'super secret key'
 app.config['SESSION_TYPE'] = 'filesystem'
 
 mon = Monitor()
+
+@app.before_first_request
+def before_first_request():
+    restore_response = mon.restore_state()
+    restart_response = mon.launch(restart=True)
+    mon.write_server_log(f'app.py before_first_request() done: {restore_response}, {restart_response}')
+
+def exit_handler():
+    # TODO on keyboard interrupt this doesn't work, because
+    #      the sigint already got forwarded to the child process
+    # possible solution would be to add a flag to monpoly
+    # which makes it such that the state gets saved on keyboard interrupt
+    # alternatively the state could be saved on every step, but this
+    # seems unnecessarily expensive
+    mon.stop_monpoly()
+    mon.write_server_log(f'app.py exit_handler() done')
+
+atexit.register(exit_handler)
 
 # TODO add method to send database credentials
 # for now the defaults are used, when questdb is running locally
@@ -55,22 +69,36 @@ def set_policy():
     '''
     this sets the policy
     '''
-    # TODO allow for changes to the policy
     if 'policy' not in request.files:
-        flash('No policy part')
         return {'message': 'no file provided, for curl use `-F` and not `-d`', 
                 'policy (POST)': mon.get_policy()}
     pol_file = request.files['policy']
     if pol_file == '':
-        flash('No selected file')
         return {'message': 'filename can\'t be empty',
                 'policy': mon.get_policy()}
     else:
         filename = secure_filename(pol_file.filename)  # type: ignore
         path = os.path.join(mon.pol_dir, filename)
         pol_file.save(path)
-        negate = True if 'negate' in request.form else False
+        negate = 'negate' in request.form
         return mon.set_policy(path, negate)
+
+@app.route('/change-policy', methods=['POST'])
+def change_policy():
+    if 'policy' not in request.files:
+        return {'message': 'no file provided, for curl use `-F` and not `-d`', 
+                'policy (POST)': mon.get_policy()}
+    pol_file = request.files['policy']
+    if pol_file == '':
+        return {'message': 'filename can\'t be empty',
+                'policy': mon.get_policy()}
+    else:
+        filename = secure_filename(pol_file.filename)  # type: ignore
+        path = os.path.join(mon.pol_dir, filename)
+        pol_file.save(path)
+        negate = 'negate' in request.form
+        # TODO later check for parameter specifying policy change method
+        return mon.change_policy(path, negate)
 
 @app.route('/get-signature', methods=['GET'])
 def get_signature():
@@ -109,7 +137,7 @@ def start_monitor():
 
 @app.route('/stop-monitor', methods=['GET', 'POST'])
 def stop_monitor():
-    return mon.stop()
+    return mon.stop_monpoly()
 
 @app.route('/reset-everything', methods=['GET'])
 def reset_monitor():

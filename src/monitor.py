@@ -167,7 +167,6 @@ class Monitor:
     def set_policy(self, policy, negate: bool=False):
         policy_location = os.path.join(self.pol_dir, policy)
         # as long as monpoly isn't running yet, the policy can still be changed
-        # TODO allow for policy change later on
         if os.path.exists(policy_location) and self.monpoly:
             return {'error': f'policy has already been set',
                     'policy_location': policy_location,
@@ -179,6 +178,53 @@ class Monitor:
         self.write_server_log(f'set policy: {policy_location_abs}')
         self.write_config()
         return {'set policy': policy}
+
+    def change_policy(self, policy, negate: bool=False, policy_change_method: str='naive'):
+        self.write_server_log('change_policy()')
+        policy_location = os.path.join(self.pol_dir, policy)
+        if not os.path.exists(policy_location):
+            self.write_server_log(f'[change_policy()] no policy has previously been set: {policy_location}')
+            return {'message': f'no policy has been set previously, use /set-policy to set it',
+                    'ls pol_dir': os.listdir(self.pol_dir)}
+
+        check = self.check_monitorability(self.sig, self.policy)
+        if not check['monitorable']:
+            self.write_server_log('[change_policy()] cannot change policy, because policy is not monitorable')
+            return {'error': check['message']}
+
+        # TODO add check that queries for the most recent timepoint
+        #      in questdb
+        #      add variable storing the most recent timestamp 
+        #      encountered and sent to questeb
+        #      compare both values and if they are different, wait
+
+        old_policy = self.get_policy()
+        self.write_server_log(f'[change_policy()] old policy: {old_policy}')
+        policy_location_abs = os.path.abspath(policy_location)
+        os.rename(policy, policy_location_abs)
+        self.policy = policy_location_abs
+        self.policy_negate = negate
+        self.write_server_log(f'changed policy: {self.get_policy()}')
+        self.write_config()
+        self.write_server_log(f'[change_policy()] wrote config: {self.get_config()}')
+        timepoints = self.get_events()
+        log_path = os.path.join(self.events_dir, 'policy_change.log')
+        self.create_log_strings(timepoints, output_file=log_path)
+        self.stop_monpoly()
+        # TODO add notice to monpoly log that the policy has been changed
+        self.write_monpoly_log(f'--- policy changed from {old_policy} to {self.get_policy()} ---'.replace('\n', ''))
+        self.write_monpoly_log('\n')
+        self.write_server_log(f'[change_policy()] stopped monpoly')
+        self.monpoly = self.start_monpoly(self.sig, self.policy, log=log_path)
+        self.write_server_log(f'[change_policy()] started monpoly')
+        if self.monpoly.stdout is None:
+            return {'error': 'monpoly stdout is None'}
+        output = ''
+        while '## Done with log file - waiting for stdin ##' not in output:
+            self.write_server_log(f'[change_policy()] waiting for monpoly to finish')
+            output += self.monpoly.stdout.readline()
+        self.clear_directory(self.events_dir)
+        return {'success': f'changed policy from {old_policy} to {self.get_policy()}'}
 
     def set_signature(self, sig):
         sig_location = os.path.join(self.sig_dir, 'sig')
@@ -209,7 +255,6 @@ class Monitor:
             json_sig.write(process.stdout)
 
         return self.get_json_signature()
-        
 
     def get_destruct_query(self, sig):
         cmd = ['monpoly', '-sql_drop', sig]
@@ -233,7 +278,7 @@ class Monitor:
         self.db.run_query(self.ts_query_create)
         return {'created tables': query_create + self.ts_query_create}
 
-    def spawn_monpoly(self, sig, pol, restart: str=''):
+    def start_monpoly(self, sig, pol, restart: str='', log: str=''):
         cmd = ['monpoly', 
                '-unix',
                '-ack_sep',
@@ -245,8 +290,17 @@ class Monitor:
         if restart:
             cmd.append('-load')
             cmd.append(restart)
+
         if self.policy_negate:
             cmd.append('-negate')
+
+        if log != '':
+            cmd.append('-log')
+            cmd.append(log)
+            cmd.append('-switch_to_stdin_after_log')
+            cmd.append('-suppress_stdout')
+            cmd.append('-nonewlastts')
+        
         self.write_server_log(f'[spawn_monpoly()] cmd={cmd}')
         p = subprocess.Popen(cmd,
                             stdin=subprocess.PIPE,
@@ -257,7 +311,7 @@ class Monitor:
             self.write_server_log(f'[spawn_monpoly()] monpoly_process.stdout is None')
         return p
 
-    def launch(self):
+    def launch(self, restart=False):
         '''
         starts or restarts monpoly and returns a string message
         '''
@@ -272,19 +326,23 @@ class Monitor:
             self.write_server_log('[launch()] cannot launch monpoly, because policy is not set')
             return 'no policy provided'
 
-        check = self.check_monitorability(self.sig, self.policy)
-        if not check['monitorable']:
-            self.write_server_log('[launch()] cannot launch monpoly, because policy is not monitorable')
-            return check['message']
+        if not restart:
+            check = self.check_monitorability(self.sig, self.policy)
+            if not check['monitorable']:
+                self.write_server_log('[launch()] cannot launch monpoly, because policy is not monitorable')
+                return check['message']
 
         if os.path.exists(self.monitor_state_path):
             self.write_server_log(f'[launch()] attempting to restart monpoly and load state from: {self.monitor_state_path}')
-            self.monpoly = self.spawn_monpoly(self.sig, self.policy, restart=self.monitor_state_path)
+            self.monpoly = self.start_monpoly(self.sig, self.policy, restart=self.monitor_state_path)
             return 'restarted monpoly'
             
-        self.monpoly = self.spawn_monpoly(self.sig, self.policy)
-        self.write_server_log('launched monpoly')
-        return f'successfully launched monpoly, pid: {self.get_monpoly_pid()}, args: {self.monpoly.args}'
+        if not restart:
+            self.monpoly = self.start_monpoly(self.sig, self.policy)
+            self.write_server_log('launched monpoly')
+            return f'successfully launched monpoly, pid: {self.get_monpoly_pid()}, args: {self.monpoly.args}'
+        else:
+            return f'cannot restart monpoly, because it was not previously started'
 
     def delete_database(self):
         '''
@@ -321,7 +379,7 @@ class Monitor:
         return {'config': f'deleted {self.conf_path}'}
 
     def delete_everything(self):
-        stop_log = self.stop()
+        stop_log = self.stop_monpoly()
         drop_log = self.delete_database()
         conf_log = self.delete_config()
         self.clear_directory(self.sig_dir)
@@ -330,14 +388,14 @@ class Monitor:
         self.clear_directory(self.monitor_logs)
         return {'deleted everything': 'done'} | drop_log | stop_log | conf_log
     
-    def stop(self):
+    def stop_monpoly(self):
         self.write_server_log('[stop()] stopping monpoly')
         log = dict()
         if not self.monpoly or self.monpoly.poll():
-            self.write_server_log('[stop()] monpoly is not running')
+            self.write_server_log(f'[stop()] monpoly is not running, self.monpoly: {self.monpoly}')
             return {'error': 'monpoly not running or already stopped'}
 
-        if self.monpoly:
+        if self.monpoly and self.monpoly.poll() is None:
             if self.monpoly.stdin:
                 self.write_server_log(f'[stop()] sending > save_and_exit {self.monitor_state_path} <; to monpoly')
                 self.monpoly.stdin.write(f'> save_and_exit {self.monitor_state_path} < ;')
@@ -445,7 +503,7 @@ class Monitor:
             return {'error': 'Monpoly is not running'}
 
             
-    def create_log_strings(self, timepoints: list) -> list:
+    def create_log_strings(self, timepoints: list, output_file=None):
         '''
         this function takes a list of event dictionaries
         it adds log strings (to be sent to monpoly) to for 
@@ -469,6 +527,10 @@ class Monitor:
                         monpoly_string += predicate_str
             monpoly_string += ';\n'
             timepoint['monpoly-string'] = monpoly_string
+            if output_file is not None:
+                with open(output_file, 'a') as f:
+                    f.write(monpoly_string)
+
             self.write_server_log(f'create_log_strings(): created monpoly string: {monpoly_string}')
         return timepoints
 
@@ -584,7 +646,7 @@ class Monitor:
             query_suffix = f"WHERE time_stamp <= '{end_date}'"
         else:
             query_suffix = ''
-                    
+
         names.append('ts')
         results = []
         for table_name in names:
