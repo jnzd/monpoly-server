@@ -306,7 +306,8 @@ class Monitor:
                             stdin=subprocess.PIPE,
                             stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT,
-                            text=True)
+                            text=True,
+                            start_new_session=True)
         if not p.stdout:
             self.write_server_log(f'[spawn_monpoly()] monpoly_process.stdout is None')
         return p

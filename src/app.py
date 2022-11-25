@@ -27,6 +27,7 @@ def exit_handler():
     # which makes it such that the state gets saved on keyboard interrupt
     # alternatively the state could be saved on every step, but this
     # seems unnecessarily expensive
+    # ---- should be fixed by 'start_new_session=True' in subprocess.Popen
     mon.stop_monpoly()
     mon.write_server_log(f'app.py exit_handler() done')
 
