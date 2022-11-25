@@ -208,22 +208,27 @@ class Monitor:
         self.write_config()
         self.write_server_log(f'[change_policy()] wrote config: {self.get_config()}')
         timepoints = self.get_events()
-        log_path = os.path.join(self.events_dir, 'policy_change.log')
-        self.create_log_strings(timepoints, output_file=log_path)
-        self.stop_monpoly()
-        # TODO add notice to monpoly log that the policy has been changed
+        timepoints_monpoly = os.path.join(self.events_dir, 'policy_change.log')
+        self.create_log_strings(timepoints, output_file=timepoints_monpoly)
+        self.stop_monpoly(save_state=False)
+        self.write_server_log(f'[change_policy()] stopped monpoly')
+        if timepoints == []:
+            self.write_server_log(f'[change_policy()] no timepoints found, starting monpoly without reading old timepoints')
+            self.monpoly = self.start_monpoly(self.sig, self.policy)
+            self.write_server_log(f'[change_policy()] started monpoly')
+        else:
+            self.write_server_log(f'[change_policy()] running monpoly and reading all past timepoints')
+            self.monpoly = self.start_monpoly(self.sig, self.policy, log=timepoints_monpoly)
+            self.write_server_log(f'[change_policy()] started monpoly')
+            if self.monpoly.stdout is None:
+                return {'error': 'monpoly stdout is None'}
+            output = ''
+            while '## Done with log file - waiting for stdin ##' not in output:
+                self.write_server_log(f'[change_policy()] waiting for monpoly to finish')
+                output += self.monpoly.stdout.readline()
+        self.clear_directory(self.events_dir)
         self.write_monpoly_log(f'--- policy changed from {old_policy} to {self.get_policy()} ---'.replace('\n', ''))
         self.write_monpoly_log('\n')
-        self.write_server_log(f'[change_policy()] stopped monpoly')
-        self.monpoly = self.start_monpoly(self.sig, self.policy, log=log_path)
-        self.write_server_log(f'[change_policy()] started monpoly')
-        if self.monpoly.stdout is None:
-            return {'error': 'monpoly stdout is None'}
-        output = ''
-        while '## Done with log file - waiting for stdin ##' not in output:
-            self.write_server_log(f'[change_policy()] waiting for monpoly to finish')
-            output += self.monpoly.stdout.readline()
-        self.clear_directory(self.events_dir)
         return {'success': f'changed policy from {old_policy} to {self.get_policy()}'}
 
     def set_signature(self, sig):
@@ -389,7 +394,7 @@ class Monitor:
         self.clear_directory(self.monitor_logs)
         return {'deleted everything': 'done'} | drop_log | stop_log | conf_log
     
-    def stop_monpoly(self):
+    def stop_monpoly(self, save_state: bool = True):
         self.write_server_log('[stop()] stopping monpoly')
         log = dict()
         if not self.monpoly or self.monpoly.poll():
@@ -397,7 +402,7 @@ class Monitor:
             return {'error': 'monpoly not running or already stopped'}
 
         if self.monpoly and self.monpoly.poll() is None:
-            if self.monpoly.stdin:
+            if save_state and self.monpoly.stdin:
                 self.write_server_log(f'[stop()] sending > save_and_exit {self.monitor_state_path} <; to monpoly')
                 self.monpoly.stdin.write(f'> save_and_exit {self.monitor_state_path} < ;')
                 self.monpoly.stdin.flush()
@@ -405,6 +410,9 @@ class Monitor:
                 return_code = self.monpoly.wait()
                 self.write_server_log(f'[stop()] monpoly exited with return code: {return_code}, self.monpoly.poll(): {self.monpoly.poll()}, saved state at {self.monitor_state_path}')
                 log |= {'stopped monpoly and stored sate, return code': return_code}
+            elif not save_state:
+                self.write_server_log("[stop()] stopping monpoly without saving state")
+                self.monpoly.kill()
             else:
                 self.write_server_log("[stop()] can't access stind of monpoly, stopping without saving state")
                 self.monpoly.kill()
