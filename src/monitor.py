@@ -455,9 +455,7 @@ class Monitor:
             return None
 
     def store_timepoints_in_db(self, timepoints: list):
-        '''
-        logs the given events in the database
-        '''
+        ''' logs the given events in the database '''
         buf = Buffer()
         for timepoint in timepoints:
             if 'skip' in timepoint.keys():
@@ -467,7 +465,6 @@ class Monitor:
             # with only one timestamp column (in combination with the influxDB Line Protocol)
             # https://github.com/questdb/questdb/issues/2691
             buf.row('ts', symbols=None, columns={'dummy_column':0}, at=ts)
-            self.write_server_log(f'[store_timepoints_in_db()]: added {ts} to ts table in buffer')
             for p in timepoint['predicates']:
                 if 'name' not in p.keys():
                     return {'log_events error': 'predicate must have a "name"'}
@@ -476,17 +473,8 @@ class Monitor:
                     break
                 name = p['name']
                 for occ in p['occurrences']:
-                    columns = {'dummy_column': 0}
-                    for i, o in enumerate(occ):
-                        # column names in questdb go from x1 to xn
-                        columns |= {f'x{i+1}': o}
-                    buf.row(
-                        name,
-                        symbols = None,
-                        columns = columns,
-                        at = ts
-                    )
-                    self.write_server_log(f'store_events_in_db(): added row to buffer: {columns} at {ts}')
+                    columns = {'dummy_column': 0} | {f'x{i+1}': o for i,o in enumerate(occ)}
+                    buf.row( name, symbols = None, columns = columns, at = ts)
                 self.most_recent_timestamp = ts
         # update config after going over all timestamps
         self.write_config()
