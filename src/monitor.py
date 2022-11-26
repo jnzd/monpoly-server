@@ -569,7 +569,7 @@ class Monitor:
         if 'timestamp' in event.keys():
             try:
                 ts = parser.parse(event['timestamp'])
-            except PasrserError:
+            except ParserError:
                 # TODO: is this desirable or should this timepoint be ignored and skipped?
                 # could return -1 and later check if 'timestamp-int' is -1
                 ts = timestamp_now
