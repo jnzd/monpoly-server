@@ -4,17 +4,16 @@ import subprocess
 from datetime import datetime
 from dateutil import parser
 from dateutil.parser import ParserError
+import time
+import psycopg2
 
 from questdb.ingress import Buffer, Sender
 
 from db_helper import DbHelper
 
-config_dir       = os.path.abspath('./monitor-data/')
-signature_dir    = os.path.join(config_dir, 'signature')
-policy_dir       = os.path.join(config_dir, 'policies')
-sql_dir          = os.path.join(config_dir, 'sql')
-events_dir       = os.path.join(config_dir, 'events')
-monitor_logs_dir = os.path.join(config_dir, 'monitor-logs')
+# if this path is absolute all subsequent paths are relative to this path
+# will be absolute paths
+CONFIG_DIR = os.path.abspath('./monitor-data/')
 
 log_timestamp_format = "%Y-%m-%d %H:%M:%S"
 # %a matches the first 3 letters of the weekday
@@ -23,34 +22,42 @@ quest_db_response_timestamp_fmt = '%a, %d %b %Y %H:%M:%S GMT'
 
 class Monitor:
     def __init__(self):
-        self.sig = ''
-        self.policy = ''
+        # should the policy be negated?
         self.policy_negate = False
-        self.conf_path = os.path.join(config_dir, 'conf.json')
-        self.log_path = os.path.join(config_dir, 'log.txt')
+        # database helper object
         self.db = DbHelper()
-        self.sig_dir = os.path.abspath(signature_dir)
-        self.pol_dir = os.path.abspath(policy_dir)
-        self.sql_dir = os.path.abspath(sql_dir)
-        self.sql_drop = os.path.join(self.sql_dir, 'drop.sql')
-        self.events_dir = os.path.abspath(events_dir)
-        self.monitor_logs = os.path.abspath(monitor_logs_dir)
-        self.monitor_state_path = os.path.join(self.monitor_logs, 'state.txt')
-        self.sig_json_path = os.path.join(self.sig_dir, 'sig.json')
-        self.monpoly_log = os.path.join(self.monitor_logs, 'monpoly_stdout.log')
-        self.monitorability_log = os.path.join(self.monitor_logs, 'monitorability.log')
+        # directory paths
+        self.signature_dir = os.path.join(CONFIG_DIR, 'signature')
+        self.policy_dir = os.path.join(CONFIG_DIR, 'policies')
+        self.sql_dir = os.path.join(CONFIG_DIR, 'sql')
+        self.events_dir = os.path.join(CONFIG_DIR, 'events')
+        self.monpoly_stdout_dir = os.path.join(CONFIG_DIR, 'monpoly-stdout')
+        self.backend_data_dir = os.path.join(CONFIG_DIR, 'backend-data')
+        # create directories if they don't exist
+        self.make_dirs(self.signature_dir)
+        self.make_dirs(self.policy_dir)
+        self.make_dirs(self.sql_dir)
+        self.make_dirs(self.monpoly_stdout_dir)
+        self.make_dirs(self.events_dir)
+        self.make_dirs(self.backend_data_dir)
+        self.conf_path = os.path.join(self.backend_data_dir, 'conf.json')
+        self.log_path = os.path.join(self.backend_data_dir, 'backend.log')
+        self.monitor_state_path = os.path.join(self.backend_data_dir, 'monpoly_state.bin')
+        # paths to individual files
+        self.signature_path = os.path.join(self.signature_dir, 'signature.sig')
+        self.sig_json_path = os.path.join(self.signature_dir, 'sig.json')
+        self.policy_path = os.path.join(self.policy_dir, 'policy.mfotl')
+        self.sql_drop_path = os.path.join(self.sql_dir, 'drop.sql')
+        self.monpoly_stdout_path = os.path.join(self.monpoly_stdout_dir, 'monpoly_stdout.log')
+        self.monitorability_log_path = os.path.join(self.monpoly_stdout_dir, 'monitorability.log')
+
+        self.most_recent_timestamp = None
         # second column isn't necessary for the functionality of the backend,
         # but questdb doesn't currently (2022-11-17) support tables with only
         # timestamp column:
         # https://github.com/questdb/questdb/issues/2691
-        # TODO ? Are predicates with no attributes possible? this same bug would come up in this case
         self.ts_query_create = "CREATE TABLE ts(dummy_column BYTE,time_stamp TIMESTAMP) timestamp(time_stamp) PARTITION BY DAY;"
         self.ts_query_drop = "DROP TABLE ts;"
-        self.make_dirs(self.sig_dir)
-        self.make_dirs(self.pol_dir)
-        self.make_dirs(self.sql_dir)
-        self.make_dirs(self.monitor_logs)
-        self.make_dirs(self.events_dir)
         self.monpoly = None
         self.restore_state()
         self.write_config()
@@ -65,7 +72,7 @@ class Monitor:
         cmd = ['monpoly', '-check', '-sig', sig, '-formula', pol]
         process = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         response = process.stdout
-        with open(self.monitorability_log, 'w') as log:
+        with open(self.monitorability_log_path, 'w') as log:
             log.write(response)
         
         if "The analyzed formula is monitorable." not in response:
@@ -74,19 +81,19 @@ class Monitor:
             return {'monitorable': True, 'message': response}
 
     def get_monitorability_log(self):
-        if os.path.exists(self.monitorability_log):
-            with open(self.monitorability_log, 'r') as log:
+        if os.path.exists(self.monitorability_log_path):
+            with open(self.monitorability_log_path, 'r') as log:
                 return log.read()
         else:
             return "monitorability not yet checked"
     
     def signature_set(self):
         '''returns true if the signature is set'''
-        return self.sig and os.path.exists(self.sig)
+        return self.signature_path and os.path.exists(self.signature_path)
 
     def policy_set(self):
         '''returns true if the policy is set'''
-        return self.policy and os.path.exists(self.policy)
+        return self.policy_path and os.path.exists(self.policy_path)
 
     def make_dirs(self, path):
         if not os.path.exists(path):
@@ -94,11 +101,11 @@ class Monitor:
     
     def db_is_empty(self) -> bool:
         '''returns true if the database is empty'''
-        return not os.path.exists(self.sql_drop)
+        return not os.path.exists(self.sql_drop_path)
     
     def get_signature(self):
-        if os.path.exists(self.sig):
-            with open(self.sig, 'r') as sig_file:
+        if os.path.exists(self.signature_path):
+            with open(self.signature_path, 'r') as sig_file:
                 return sig_file.read()
         else:
             return 'no signature set'
@@ -112,25 +119,21 @@ class Monitor:
     
     def get_policy(self):
         policy = ''
-        if not os.path.exists(self.policy):
+        if not os.path.exists(self.policy_path):
             policy = 'no policy set'
         else: 
-            with open(self.policy, 'r') as pol_file:
+            with open(self.policy_path, 'r') as pol_file:
                 policy = pol_file.read()
                 pol_file.close()
-        return policy
+        return f'{"NOT" if self.policy_negate else ""} {policy}'
     
     def get_schema(self):
         return self.db.run_query('SHOW TABLES;', select = True)
 
     def get_config(self) -> dict:
-
-        config = {'signature': self.sig,
-                  'signature_json': self.sig_json_path,
-                  'policy': self.policy,
-                  'policy_negate': self.policy_negate,
+        config = {'policy_negate': self.policy_negate,
                   'db': self.db.get_config(),
-                  'sql_drop': self.sql_drop
+                  'most_recent_timestamp': datetime.strftime(self.most_recent_timestamp, log_timestamp_format) if self.most_recent_timestamp else None,
                 }
         return config
     
@@ -143,19 +146,18 @@ class Monitor:
             self.write_server_log(f'established database connection: {self.db.get_config()}')
         
     def restore_state(self):
-        self.write_server_log(f'restore_state()')
+        # TODO: when get_config() gets changed, change this as well
         if os.path.exists(self.conf_path):
-            self.write_server_log(f'[restore_state()] config file exists: {self.conf_path}')
             with open(self.conf_path, 'r') as conf_json:
                 conf = json.load(conf_json)
-                self.write_server_log(f'[restore_state()] config file loaded: {conf}')
-                self.sig = conf['signature']
-                self.sig_json = conf['signature_json']
-                self.policy = conf['policy']
-                self.policy_negate = bool(conf['policy_negate'])
-
-                self.write_server_log(f'[restore_state()] calling restore_db({conf})')
+                self.policy_negate = conf['policy_negate']
+                tp = conf['most_recent_timestamp']
+                if tp is not None:
+                    self.most_recent_timestamp = parser.parse(tp)
                 self.restore_db(conf)
+                self.write_server_log(f'[restore_state()] restored state with: {conf}')
+        else:
+            self.write_server_log(f'[restore_state()] config file doesn\'t exist: {self.conf_path}')
     
     def write_config(self):
         conf = self.get_config()
@@ -165,29 +167,23 @@ class Monitor:
             self.write_server_log(f'wrote config: {conf_string}')
 
     def set_policy(self, policy, negate: bool=False):
-        policy_location = os.path.join(self.pol_dir, policy)
         # as long as monpoly isn't running yet, the policy can still be changed
-        if os.path.exists(policy_location) and self.monpoly:
-            return {'error': f'policy has already been set',
-                    'policy_location': policy_location,
-                    'ls pol_dir': os.listdir(self.pol_dir)}
-        policy_location_abs = os.path.abspath(policy_location)
-        os.rename(policy, policy_location_abs)
-        self.policy = policy_location_abs
+        if os.path.exists(self.policy_path) and self.monpoly:
+            return {'error': f'monpoly is already running and policy has been set. Use change_policy() to change the policy.',
+                    'ls pol_dir': os.listdir(self.policy_dir)}
+        os.rename(policy, self.policy_path)
         self.policy_negate = negate
-        self.write_server_log(f'set policy: {policy_location_abs}')
+        self.write_server_log(f'set policy: {self.get_policy()}')
         self.write_config()
-        return {'set policy': policy}
+        return {'message': f'policy set to {self.get_policy()}'}
 
     def change_policy(self, policy, negate: bool=False, policy_change_method: str='naive'):
-        self.write_server_log('change_policy()')
-        policy_location = os.path.join(self.pol_dir, policy)
-        if not os.path.exists(policy_location):
-            self.write_server_log(f'[change_policy()] no policy has previously been set: {policy_location}')
+        if not os.path.exists(self.policy_path):
+            self.write_server_log(f'[change_policy()] no policy has previously been set: {self.policy_path}')
             return {'message': f'no policy has been set previously, use /set-policy to set it',
-                    'ls pol_dir': os.listdir(self.pol_dir)}
+                    'ls pol_dir': os.listdir(self.policy_dir)}
 
-        check = self.check_monitorability(self.sig, self.policy)
+        check = self.check_monitorability(self.signature_path, self.policy_path)
         if not check['monitorable']:
             self.write_server_log('[change_policy()] cannot change policy, because policy is not monitorable')
             return {'error': check['message']}
@@ -198,27 +194,30 @@ class Monitor:
         #      encountered and sent to questeb
         #      compare both values and if they are different, wait
 
+        if self.most_recent_timestamp is not None:
+            most_recent_db = self.get_most_recent_timestamp_from_db()
+            while most_recent_db is None or most_recent_db < self.most_recent_timestamp:
+                most_recent_db = self.get_most_recent_timestamp_from_db()
+                self.write_server_log(f'[change_policy()] waiting for most recent timestamp seen to be in database: {most_recent_db} < {self.most_recent_timestamp}')
+                time.sleep(10)
+
         old_policy = self.get_policy()
-        self.write_server_log(f'[change_policy()] old policy: {old_policy}')
-        policy_location_abs = os.path.abspath(policy_location)
-        os.rename(policy, policy_location_abs)
-        self.policy = policy_location_abs
+        os.rename(policy, self.policy_path)
         self.policy_negate = negate
-        self.write_server_log(f'changed policy: {self.get_policy()}')
+        # update negation in config
         self.write_config()
-        self.write_server_log(f'[change_policy()] wrote config: {self.get_config()}')
+        self.write_server_log(f'[change_policy()] changed policy from {old_policy} to {self.get_policy()}')
         timepoints = self.get_events()
-        timepoints_monpoly = os.path.join(self.events_dir, 'policy_change.log')
+        timepoints_monpoly = os.path.join(self.events_dir, 'events_policy_change.log')
         self.create_log_strings(timepoints, output_file=timepoints_monpoly)
         self.stop_monpoly(save_state=False)
-        self.write_server_log(f'[change_policy()] stopped monpoly')
         if timepoints == []:
             self.write_server_log(f'[change_policy()] no timepoints found, starting monpoly without reading old timepoints')
-            self.monpoly = self.start_monpoly(self.sig, self.policy)
+            self.monpoly = self.start_monpoly(self.signature_path, self.policy_path)
             self.write_server_log(f'[change_policy()] started monpoly')
         else:
             self.write_server_log(f'[change_policy()] running monpoly and reading all past timepoints')
-            self.monpoly = self.start_monpoly(self.sig, self.policy, log=timepoints_monpoly)
+            self.monpoly = self.start_monpoly(self.signature_path, self.policy_path, log=timepoints_monpoly)
             self.write_server_log(f'[change_policy()] started monpoly')
             if self.monpoly.stdout is None:
                 return {'error': 'monpoly stdout is None'}
@@ -232,24 +231,20 @@ class Monitor:
         return {'success': f'changed policy from {old_policy} to {self.get_policy()}'}
 
     def set_signature(self, sig):
-        sig_location = os.path.join(self.sig_dir, 'sig')
         # as long as monpoly isn't running yet, the policy can still be changed
-        if os.path.exists(sig_location):
+        if os.path.exists(self.signature_path):
             if self.monpoly:
                 return {'error': f'signature has already been set',
-                        'sig_location': sig_location,
-                        'ls sig_dir': os.listdir(self.sig_dir)}
+                        'ls sig_dir': os.listdir(self.signature_dir)}
             else:
                 self.delete_database()
-        sig_location_abs = os.path.abspath(sig_location)
-        os.rename(sig, sig_location_abs)
-        self.sig = sig_location_abs
-        init_log = self.init_database(self.sig)
-        drop_log = self.get_destruct_query(self.sig)
-        json_log = self.create_json_signature(self.sig)
-        self.write_server_log(f'set signature: {sig_location_abs}')
+        os.rename(sig, self.signature_path)
+        self.init_database(self.signature_path)
+        self.set_destruct_query(self.signature_path)
+        self.create_json_signature(self.signature_path)
+        self.write_server_log(f'set signature: {self.get_signature()}')
         self.write_config()
-        return init_log | drop_log | json_log
+        return {'message': f'signature set to {self.get_signature()}'}
     
     def create_json_signature(self, sig):
         cmd = ['monpoly', '-sig_to_json', sig]
@@ -261,15 +256,15 @@ class Monitor:
 
         return self.get_json_signature()
 
-    def get_destruct_query(self, sig):
+    def set_destruct_query(self, sig):
         cmd = ['monpoly', '-sql_drop', sig]
         process = subprocess.run(cmd, capture_output=True, text=True)
         query_drop = process.stdout
         query_drop += self.ts_query_drop
         self.write_server_log(f'[get_destruct_query()] Generated drop query: {query_drop}')
-        with open(self.sql_drop, 'w') as drop_file:
+        with open(self.sql_drop_path, 'w') as drop_file:
             drop_file.write(query_drop)
-        return {'drop query': query_drop, 'drop file': self.sql_drop}
+        return {'drop query': query_drop, 'drop file': self.sql_drop_path}
 
     def init_database(self, sig, verbose: bool = True):
         '''
@@ -333,18 +328,18 @@ class Monitor:
             return 'no policy provided'
 
         if not restart:
-            check = self.check_monitorability(self.sig, self.policy)
+            check = self.check_monitorability(self.signature_path, self.policy_path)
             if not check['monitorable']:
                 self.write_server_log('[launch()] cannot launch monpoly, because policy is not monitorable')
                 return check['message']
 
         if os.path.exists(self.monitor_state_path):
             self.write_server_log(f'[launch()] attempting to restart monpoly and load state from: {self.monitor_state_path}')
-            self.monpoly = self.start_monpoly(self.sig, self.policy, restart=self.monitor_state_path)
+            self.monpoly = self.start_monpoly(self.signature_path, self.policy_path, restart=self.monitor_state_path)
             return 'restarted monpoly'
             
         if not restart:
-            self.monpoly = self.start_monpoly(self.sig, self.policy)
+            self.monpoly = self.start_monpoly(self.signature_path, self.policy_path)
             self.write_server_log('launched monpoly')
             return f'successfully launched monpoly, pid: {self.get_monpoly_pid()}, args: {self.monpoly.args}'
         else:
@@ -356,19 +351,19 @@ class Monitor:
         '''
         query = ''
         if not self.db_is_empty():
-            with open(self.sql_drop, 'r') as drop_file:
+            with open(self.sql_drop_path, 'r') as drop_file:
                 query = drop_file.read()
                 drop_file.close()
         elif self.db_is_empty():
             self.write_server_log(f'delete_database(): database is already empty (os.listdir({self.sql_dir}): {os.listdir(self.sql_dir)})')
             return {'error': 'Database is already empty'}
 
-        self.write_server_log(f'delete_database(): deleting tables associated with {self.sig}')
+        self.write_server_log(f'delete_database(): deleting tables associated with {self.signature_path}')
         self.write_server_log(f'delete_database(): running query: {query}')
 
         # TODO prompt user before running this query and deleting all tables
         self.db.run_query(query)
-        os.remove(self.sql_drop)
+        os.remove(self.sql_drop_path)
         return{'query': query}
     
     def clear_directory(self, path):
@@ -385,13 +380,16 @@ class Monitor:
         return {'config': f'deleted {self.conf_path}'}
 
     def delete_everything(self):
-        stop_log = self.stop_monpoly()
+        stop_log = self.stop_monpoly(save_state=False)
         drop_log = self.delete_database()
         conf_log = self.delete_config()
-        self.clear_directory(self.sig_dir)
-        self.clear_directory(self.pol_dir)
+        self.clear_directory(self.signature_dir)
+        self.clear_directory(self.policy_dir)
         self.clear_directory(self.events_dir)
-        self.clear_directory(self.monitor_logs)
+        self.clear_directory(self.monpoly_stdout_dir)
+        self.clear_directory(self.sql_dir)
+        if os.path.exists(self.monitor_state_path):
+            os.remove(self.monitor_state_path)
         return {'deleted everything': 'done'} | drop_log | stop_log | conf_log
     
     def stop_monpoly(self, save_state: bool = True):
@@ -436,15 +434,25 @@ class Monitor:
             return 'monpoly not running (yet)'
 
     def write_monpoly_log(self, log):
-        with open(self.monpoly_log, 'a') as monpoly_log:
+        with open(self.monpoly_stdout_path, 'a') as monpoly_log:
             monpoly_log.write(log)
 
     def get_stdout(self):
-        if not os.path.exists(self.monpoly_log):
+        if not os.path.exists(self.monpoly_stdout_path):
             return 'error stdout log does not exist'
-        with open(self.monpoly_log, 'r') as stdout:
+        with open(self.monpoly_stdout_path, 'r') as stdout:
             return stdout.read() or 'stdout is empty'
 
+    def get_most_recent_timestamp_from_db(self):
+        # TODO alternative to try/except is checking if dv is empty first
+        try:
+            t = self.db.run_query('SELECT MAX(time_stamp) FROM ts;', select=True)
+            if t:
+                return t[0][0]
+            else:
+                return None
+        except psycopg2.DatabaseError:
+            return None
 
     def store_timepoints_in_db(self, timepoints: list):
         '''
@@ -479,6 +487,9 @@ class Monitor:
                         at = ts
                     )
                     self.write_server_log(f'store_events_in_db(): added row to buffer: {columns} at {ts}')
+                self.most_recent_timestamp = ts
+        # update config after going over all timestamps
+        self.write_config()
         with Sender(self.db.host, self.db.port_influxdb) as sender:
             self.write_server_log(f'sending buffer {buf} to database')
             sender.flush(buf)
@@ -632,8 +643,6 @@ class Monitor:
 
         return result
         
-        
-
     def get_events(self, start_date=None, end_date=None) -> list:
         '''
         returns all events in the database in the same json format

@@ -79,7 +79,7 @@ def set_policy():
                 'policy': mon.get_policy()}
     else:
         filename = secure_filename(pol_file.filename)  # type: ignore
-        path = os.path.join(mon.pol_dir, filename)
+        path = os.path.join(mon.policy_dir, filename)
         pol_file.save(path)
         negate = 'negate' in request.form
         return mon.set_policy(path, negate)
@@ -95,7 +95,7 @@ def change_policy():
                 'policy': mon.get_policy()}
     else:
         filename = secure_filename(pol_file.filename)  # type: ignore
-        path = os.path.join(mon.pol_dir, filename)
+        path = os.path.join(mon.policy_dir, filename)
         pol_file.save(path)
         negate = 'negate' in request.form
         # TODO later check for parameter specifying policy change method
@@ -123,7 +123,7 @@ def set_signature():
                 'signature (POST-empty-name)': mon.get_signature()}
     else:
         filename = secure_filename(sig_file.filename)  # type: ignore
-        path = os.path.join(mon.sig_dir, filename)
+        path = os.path.join(mon.signature_dir, filename)
         sig_file.save(path)
         return mon.set_signature(path)
 
@@ -183,5 +183,7 @@ def get_events():
 
     return mon.get_events(start_date=start_date, end_date=end_date)
         
-
+@app.route('/get-most-recent', methods=['GET'])
+def get_most_recent():
+    return {'response': mon.get_most_recent_timestamp_from_db()}
     
