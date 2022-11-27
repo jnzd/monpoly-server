@@ -6,19 +6,13 @@ from dateutil import parser
 from dateutil.parser import ParserError
 import time
 import psycopg2
-
 from questdb.ingress import Buffer, Sender
-
 from db_helper import DbHelper
 
 # if this path is absolute all subsequent paths are relative to this path
 # will be absolute paths
 CONFIG_DIR = os.path.abspath('./monitor-data/')
-
-log_timestamp_format = "%Y-%m-%d %H:%M:%S"
-# %a matches the first 3 letters of the weekday
-# %b matches the first 3 letters of the month
-quest_db_response_timestamp_fmt = '%a, %d %b %Y %H:%M:%S GMT'
+LOG_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 class Monitor:
     def __init__(self):
@@ -63,7 +57,7 @@ class Monitor:
         self.write_config()
 
     def write_server_log(self, msg: str):
-        time_stamp = datetime.now().strftime(log_timestamp_format)
+        time_stamp = datetime.now().strftime(LOG_TIMESTAMP_FORMAT)
         with open(self.log_path, 'a') as log:
             log.write(f'[{time_stamp}] {msg}\n')
 
@@ -133,7 +127,7 @@ class Monitor:
     def get_config(self) -> dict:
         config = {'policy_negate': self.policy_negate,
                   'db': self.db.get_config(),
-                  'most_recent_timestamp': datetime.strftime(self.most_recent_timestamp, log_timestamp_format) if self.most_recent_timestamp else None,
+                  'most_recent_timestamp': datetime.strftime(self.most_recent_timestamp, LOG_TIMESTAMP_FORMAT) if self.most_recent_timestamp else None,
                 }
         return config
     
@@ -358,8 +352,7 @@ class Monitor:
             self.write_server_log(f'delete_database(): database is already empty (os.listdir({self.sql_dir}): {os.listdir(self.sql_dir)})')
             return {'error': 'Database is already empty'}
 
-        self.write_server_log(f'delete_database(): deleting tables associated with {self.signature_path}')
-        self.write_server_log(f'delete_database(): running query: {query}')
+        self.write_server_log(f'delete_database(): deleting tables associated with {self.get_signature()}')
 
         # TODO prompt user before running this query and deleting all tables
         self.db.run_query(query)
@@ -493,7 +486,6 @@ class Monitor:
                 result = ''
                 reached_separator = False
                 while not reached_separator:
-                    self.write_server_log(f'[send_events_to_monpoly({event_str})] reading monpoly response')
                     line = self.monpoly.stdout.readline()
                     self.write_server_log(f'[send_events_to_monpoly({event_str})] read line from monpoly: {line}')
                     reached_separator = '## reached separator ##' in line
@@ -592,9 +584,9 @@ class Monitor:
                 db_response = self.store_timepoints_in_db(timepoints)
                 self.write_server_log(f'stored events in db: {db_response}')
 
-                return {'success': 'logged events',
-                        'db_response': db_response,
-                        'skipped timepoints': skip_log}
+                return { 'skipped-timepoints': skip_log}
+                # return {'db-response': db_response,
+                #         'skipped-timepoints': skip_log}
 
             except ValueError as e:
                 print(f'error parsing json file: {e}')
@@ -609,7 +601,7 @@ class Monitor:
         result = dict()
         for ts in timestamps:
             ts_int = int(ts.timestamp())
-            ts_dict = {'timestamp-int': ts_int, 'timestamp': ts.strftime(log_timestamp_format), 'predicates': dict()}
+            ts_dict = {'timestamp-int': ts_int, 'timestamp': ts.strftime(LOG_TIMESTAMP_FORMAT), 'predicates': dict()}
             result[ts_int] = ts_dict
 
         for predicate_name in db_response_dict.keys():
