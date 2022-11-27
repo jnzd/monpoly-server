@@ -163,7 +163,7 @@ def log():
         path = os.path.join(mon.events_dir, filename)
         events_file.save(path)
         result = mon.log_timepoints(path)
-        return result | {'message': 'events logged'}
+        return result
 
 @app.route('/get-events', methods=['GET'])
 def get_events():
