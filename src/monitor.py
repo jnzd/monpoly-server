@@ -4,7 +4,6 @@ import subprocess
 from datetime import datetime
 from dateutil import parser
 from dateutil.parser import ParserError
-import time
 import psycopg2
 from questdb.ingress import Buffer, Sender
 from db_helper import DbHelper
@@ -60,6 +59,8 @@ class Monitor:
         self.write_config()
 
     def write_server_log(self, msg: str):
+        # print(f'writing to server log: {self.log_path}')
+        # print(f'[{datetime.now().strftime(LOG_TIMESTAMP_FORMAT)}] {msg}')
         time_stamp = datetime.now().strftime(LOG_TIMESTAMP_FORMAT)
         with open(self.log_path, 'a') as log:
             log.write(f'[{time_stamp}] {msg}\n')
@@ -174,37 +175,47 @@ class Monitor:
         self.write_config()
         return {'message': f'policy set to {self.get_policy()}'}
 
-    def change_policy(self, policy, negate: bool=False, policy_change_method: str='naive'):
+    def get_relative_intervals(self, policy_path):
+        cmd = ['monpoly', '-relative_interval_per_predicate_json', '-sig', self.signature_path, '-formula', policy_path]
+        process = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        response_1 = process.stdout
+        self.write_server_log(f'get_relative_intervals({policy_path}):\n {response_1}')
+        cmd = ['monpoly', '-get_relative_interval', '-sig', self.signature_path, '-formula', policy_path]
+        process = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        response_2 = process.stdout
+        self.write_server_log(f'get_relative_intervals({policy_path}) [entire formula]: {response_2}')
+        return (response_2, json.loads(response_1))
+
+    def change_policy(self, new_policy_path: str, negate: bool=False, policy_change_method: str='naive'):
+        self.write_server_log(f'[change_policy()] negate: {negate}')
         if not os.path.exists(self.policy_path):
             self.write_server_log(f'[change_policy()] no policy has previously been set: {self.policy_path}')
             return {'message': f'no policy has been set previously, use /set-policy to set it',
                     'ls pol_dir': os.listdir(self.policy_dir)}
 
-        check = self.check_monitorability(self.signature_path, self.policy_path)
+        check = self.check_monitorability(self.signature_path, new_policy_path)
         if not check['monitorable']:
             self.write_server_log('[change_policy()] cannot change policy, because policy is not monitorable')
             return {'error': check['message']}
 
-        # TODO add check that queries for the most recent timepoint
-        #      in questdb
-        #      add variable storing the most recent timestamp 
-        #      encountered and sent to questeb
-        #      compare both values and if they are different, wait
-
         if self.most_recent_timestamp is not None:
             most_recent_db = self.get_most_recent_timestamp_from_db()
-            while most_recent_db is None or most_recent_db < self.most_recent_timestamp:
-                most_recent_db = self.get_most_recent_timestamp_from_db()
-                self.write_server_log(f'[change_policy()] waiting for most recent timestamp seen to be in database: {most_recent_db} < {self.most_recent_timestamp}')
-                time.sleep(10)
+            if most_recent_db is None or most_recent_db < self.most_recent_timestamp:
+                return {'error': f'Retry again later. Most recent timestamp seen is not in database yet: {most_recent_db} < {self.most_recent_timestamp}'}
+            # while most_recent_db is None or most_recent_db < self.most_recent_timestamp:
+            #     most_recent_db = self.get_most_recent_timestamp_from_db()
+            #     self.write_server_log(f'[change_policy()] waiting for most recent timestamp seen to be in database: {most_recent_db} < {self.most_recent_timestamp}')
+            #     time.sleep(10)
+        
+        relative_intervals = self.get_relative_intervals(new_policy_path)
 
         old_policy = self.get_policy()
-        os.rename(policy, self.policy_path)
+        os.rename(new_policy_path, self.policy_path)
         self.policy_negate = negate
         # update negation in config
         self.write_config()
         self.write_server_log(f'[change_policy()] changed policy from {old_policy} to {self.get_policy()}')
-        timepoints = self.get_events()
+        timepoints = self.get_events(relative_intervals=relative_intervals)
         timepoints_monpoly = os.path.join(self.events_dir, 'events_policy_change.log')
         self.create_log_strings(timepoints, output_file=timepoints_monpoly)
         self.stop_monpoly(save_state=False)
@@ -600,7 +611,10 @@ class Monitor:
     def db_response_to_timepoints(self, db_response: list) -> list:
         self.write_server_log(f'[db_response_to_timepoints()] converting db response to timepoints')
         db_response_dict = {k: v for d in db_response for k, v in d.items()}
-        timestamps = {x[1] for x in db_response_dict['ts']}
+        if db_response_dict['ts'] is not None:
+            timestamps = {x[1] for x in db_response_dict['ts'] if x is not None}
+        else:
+            return []
         result = dict()
         for ts in timestamps:
             ts_int = int(ts.timestamp())
@@ -625,12 +639,60 @@ class Monitor:
         result.sort(key=lambda e: e['timestamp-int'])
 
         return result
+
+    def parse_masked_interval(self, mask: list, interval: str) -> str:
+        named_mask = [(f'x{i+1} = {y}', interval) for (i,y), interval in zip(enumerate(mask), interval) if y is not None]
+        mask_query = ' AND '.join([x[0] for x in named_mask])
+        if mask_query == '':
+            return f'({interval})'
+        return f'({mask_query} AND {interval})' 
+
+    def parse_interval(self, i: str) -> str:
+        is_lower_open = i[0] == '('
+        is_upper_open = i[-1] == ')'
+        bounds = i[1:-1].split(',')
+        upper = datetime.utcfromtimestamp(int(bounds[1]))
+        lower = datetime.utcfromtimestamp(int(bounds[0]))
+        if upper == '*' and lower == '*':
+            query = ""
+        elif upper == '*':
+            query = f'time_stamp {">" if is_lower_open else ">="} \'{lower}\''
+        elif lower == '*':
+            query = f'time_stamp {"<" if is_upper_open else "<="} \'{upper}\''
+        else:
+            query = f'time_stamp {">" if is_lower_open else ">="} \'{lower}\' AND time_stamp {"<" if is_upper_open else "<="} \'{upper}\''
+        # print(query)
+        return query
         
-    def get_events(self, start_date=None, end_date=None) -> list:
-        '''
-        returns all events in the database in the same json format
-        that this backend takes as input
-        '''
+    def relative_intervals_to_query_per_predicate(self, predicate_name: str, intervals: list) -> str:
+        prefix = f'SELECT * FROM {predicate_name} WHERE '
+        conditions = []
+        for masked_interval in intervals:
+            mask = masked_interval['mask']
+            interval = masked_interval['interval']
+            parsed_interval = self.parse_interval(interval)
+            parsed_masked_interval = self.parse_masked_interval(mask, parsed_interval)
+            conditions.append(parsed_masked_interval)
+        
+        suffix = ' OR '.join(conditions) + ';'
+        return prefix + suffix
+
+    def relative_intervals_to_query(self, relative_intervals: list) -> list[tuple[str,str]]:
+        queries = []
+        rl, rls = relative_intervals
+        for predicate in rls:
+            name = predicate['predicate_name']
+            intervals = predicate['intervals']
+            query = self.relative_intervals_to_query_per_predicate(name, intervals)
+            queries.append((name, query))
+        # TODO also query all timepoints in `ts` for the entire relative interval
+        parsed_interval = self.parse_interval(rl)
+        query = f'SELECT * FROM ts WHERE {parsed_interval};'
+        queries.append(('ts', query))
+        return queries
+        
+    def queries_from_dates(self, start_date=None, end_date=None) -> list[tuple[str,str]]:
+        queries = []
         names = []
         if os.path.exists(self.sig_json_path):
             with open(self.sig_json_path) as f:
@@ -649,11 +711,27 @@ class Monitor:
             query_suffix = ''
 
         names.append('ts')
+        for predicate_name in names:
+            query = f'SELECT * FROM {predicate_name} {query_suffix};'
+            queries.append((predicate_name, query))
+        return queries
+        
+    def get_events(self, relative_intervals=None, start_date=None, end_date=None) -> list:
+        '''
+        returns all events in the database in the same json format
+        that this backend takes as input
+        '''
+        queries = []
+        if relative_intervals is not None:
+            queries = self.relative_intervals_to_query(relative_intervals)
+        else:
+            queries = self.queries_from_dates(start_date, end_date)
+
         results = []
-        for table_name in names:
-            self.write_server_log(f'[get_events()] getting events for table: {table_name}')
-            response = self.db.run_query(f'SELECT * FROM {table_name} {query_suffix};', select=True)
-            self.write_server_log(f'[get_events()] got response from db: {response}')
-            results.append({table_name: response})
+        for predicate_name, query in queries:
+            self.write_server_log(f'    running query: {query}')
+            response = self.db.run_query(query)
+            results.append({predicate_name: response})
+
         monpoly_log = self.db_response_to_timepoints(results)
         return monpoly_log
