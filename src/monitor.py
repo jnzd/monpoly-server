@@ -11,6 +11,9 @@ from db_helper import DbHelper
 
 # if this path is absolute all subsequent paths are relative to this path
 # will be absolute paths
+abspath = os.path.abspath(os.path.join(__file__, '..'))
+dname = os.path.dirname(abspath)
+os.chdir(dname)
 CONFIG_DIR = os.path.abspath('./monitor-data/')
 LOG_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
 
