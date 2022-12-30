@@ -52,7 +52,7 @@ class DbHelper:
             sslmode='disable')
         return connection
 
-    def run_query(self, query: str, select: bool = False, verbose: bool = True):
+    def run_query(self, query: str, select: bool = False, verbose: bool = False):
         '''
         Runs the given SQL query on the database
         '''
