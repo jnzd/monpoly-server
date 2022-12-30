@@ -12,6 +12,10 @@ app = Flask(__name__, static_folder='./static')
 app.secret_key = 'super secret key'
 app.config['SESSION_TYPE'] = 'filesystem'
 
+abspath = os.path.abspath(os.path.join(__file__, '..'))
+dname = os.path.dirname(abspath)
+os.chdir(dname)
+
 mon = Monitor()
 
 @app.before_first_request
