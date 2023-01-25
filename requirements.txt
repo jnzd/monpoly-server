@@ -1,0 +1,5 @@
+questdb
+psycopg2
+python-dateutil
+flask
+
