@@ -80,3 +80,39 @@ class DbHelper:
                 connection.close()
             if verbose:
                 print("Postgres connection is closed.")
+
+    def set_user(self, user: str):
+        self.user = user
+
+    def set_password(self, password: str):
+        self.password = password
+    
+    def set_host(self, host: str):
+        self.host = host
+    
+    def set_pgsql_port(self, port: int):
+        self.port_pgsql = port
+
+    def set_influxdb_port(self, port: int):
+        self.port_influxdb = port
+
+    def set_database(self, database: str):
+        self.database = database
+
+    def get_user(self):
+        return self.user
+
+    def get_password(self):
+        return self.password
+    
+    def get_host(self):
+        return self.host
+    
+    def get_pgsql_port(self):
+        return self.port_pgsql
+
+    def get_influxdb_port(self):
+        return self.port_influxdb
+
+    def get_database(self):
+        return self.database

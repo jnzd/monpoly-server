@@ -211,3 +211,101 @@ def get_events():
 @app.route("/get-most-recent", methods=["GET"])
 def get_most_recent():
     return {"response": mon.get_most_recent_timestamp_from_db()}
+
+## Database configuration methods
+
+@app.route("/db-set-user", methods=["POST"])
+def db_set_user():
+    if "user" not in request.form:
+        return {"error": "no user provided"}
+    user = request.form["user"]
+    try:
+        mon.db.set_user(user)
+        mon.write_config()
+        return {"response": f"set user to {user}"}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.route("/db-set-password", methods=["POST"])
+def db_set_password():
+    if "password" not in request.form:
+        return {"error": "no password provided"}
+    password = request.form["password"]
+    try:
+        mon.db.set_password(password)
+        mon.write_config()
+        return {"response": f"set password to {password}"}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.route("/db-set-host", methods=["POST"])
+def db_set_host():
+    if "host" not in request.form:
+        return {"error": "no host provided"}
+    host = request.form["host"]
+    try:
+        mon.db.set_host(host)
+        mon.write_config()
+        return {"response": f"set host to {host}"}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.route("/db-set-pgsql-port", methods=["POST"])
+def db_set_pgsql_port():
+    if "port" not in request.form:
+        return {"error": "no port provided"}
+    port = request.form["port"]
+    try:
+        mon.db.set_pgsql_port(port)
+        mon.write_config()
+        return {"response": f"set port to {port}"}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.route("/db-set-influxdb-port", methods=["POST"])
+def db_set_influxdb_port():
+    if "port" not in request.form:
+        return {"error": "no port provided"}
+    port = request.form["port"]
+    try:
+        mon.db.set_influxdb_port(port)
+        mon.write_config()
+        return {"response": f"set port to {port}"}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.route("/db-set-database", methods=["POST"])
+def db_set_database():
+    if "database" not in request.form:
+        return {"error": "no database provided"}
+    database = request.form["database"]
+    try:
+        mon.db.set_database(database)
+        mon.write_config()
+        return {"response": f"set database to {database}"}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.route("/db-get-user", methods=["GET"])
+def db_get_user():
+    return {"response": mon.db.get_user()}
+
+@app.route("/db-get-password", methods=["GET"])
+def db_get_password():
+    return {"response": mon.db.get_password()}
+
+@app.route("/db-get-host", methods=["GET"])
+def db_get_host():
+    return {"response": mon.db.get_host()}
+
+@app.route("/db-get-pgsql-port", methods=["GET"])
+def db_get_pgsql_port():
+    return {"response": mon.db.get_pgsql_port()}
+
+@app.route("/db-get-influxdb-port", methods=["GET"])
+def db_get_influxdb_port():
+    return {"response": mon.db.get_influxdb_port()}
+
+@app.route("/db-get-database", methods=["GET"])
+def db_get_database():
+    return {"response": mon.db.get_database()}
