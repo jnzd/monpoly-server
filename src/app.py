@@ -140,7 +140,10 @@ def set_signature():
 
 @app.route("/start-monitor", methods=["GET", "POST"])
 def start_monitor():
-    launch_msg = mon.launch()
+    use_existing_db = False
+    if "existing-db" in request.form:
+        use_existing_db = True
+    launch_msg = mon.launch(db_exists=use_existing_db)
     return {"launch message": launch_msg}
 
 

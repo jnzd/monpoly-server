@@ -363,7 +363,7 @@ class Monitor:
                 "[change_policy()] no timepoints found, starting monpoly without reading old timepoints"
             )
             self.monpoly = self.start_monpoly(self.signature_path, self.policy_path)
-            self.write_server_log(f"[change_policy()] started monpoly")
+            self.write_server_log("[change_policy()] started monpoly")
         else:
             self.write_server_log(
                 "[change_policy()] running monpoly and reading all past timepoints"
@@ -371,7 +371,7 @@ class Monitor:
             self.monpoly = self.start_monpoly(
                 self.signature_path, self.policy_path, log=timepoints_monpoly
             )
-            self.write_server_log(f"[change_policy()] started monpoly")
+            self.write_server_log("[change_policy()] started monpoly")
             if self.monpoly.stdout is None:
                 return {"error": "monpoly stdout is None"}
             output = ""
@@ -389,11 +389,13 @@ class Monitor:
         self.write_monpoly_log("\n")
         return {"success": f"changed policy from {old_policy} to {self.get_policy()}"}
 
-    def set_signature(self, sig):
+    def set_signature(self, sig, db_exists=False):
         """sets the signature of the monitor, sets the database schema
 
         Args:
             sig (_type_): path to a signature file
+            db_exists (bool, optional): whether or not the database already 
+                exists. Defaults to False.
 
         Returns:
             _type_: JSON style status message
@@ -402,13 +404,14 @@ class Monitor:
         if os.path.exists(self.signature_path):
             if self.monpoly:
                 return {
-                    "error": f"signature has already been set",
+                    "error": "signature has already been set",
                     "ls sig_dir": os.listdir(self.signature_dir),
                 }
             else:
                 self.delete_database()
         os.rename(sig, self.signature_path)
-        self.init_database(self.signature_path)
+        if not db_exists:
+            self.init_database(self.signature_path)
         self.set_destruct_query(self.signature_path)
         self.create_json_signature(self.signature_path)
         self.write_server_log(f"set signature: {self.get_signature()}")
@@ -521,7 +524,7 @@ class Monitor:
             self.write_server_log(f"[spawn_monpoly()] monpoly_process.stdout is None")
         return p
 
-    def launch(self, restart=False):
+    def launch(self, restart=False, db_exists=False):
         """
         starts or restarts monpoly and returns a string message
         """
@@ -558,6 +561,9 @@ class Monitor:
                 self.signature_path, self.policy_path, restart=self.monitor_state_path
             )
             return "restarted monpoly"
+
+        if db_exists:
+            return self.change_policy(self.policy_path, self.policy_negate)
 
         if not restart:
             self.monpoly = self.start_monpoly(self.signature_path, self.policy_path)
