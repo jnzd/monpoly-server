@@ -27,21 +27,11 @@ def before_first_request():
 
 
 def exit_handler():
-    # TODO on keyboard interrupt this doesn't work, because
-    #      the sigint already got forwarded to the child process
-    # possible solution would be to add a flag to monpoly
-    # which makes it such that the state gets saved on keyboard interrupt
-    # alternatively the state could be saved on every step, but this
-    # seems unnecessarily expensive
-    # ---- should be fixed by 'start_new_session=True' in subprocess.Popen
     mon.stop_monpoly()
     mon.write_server_log(f"app.py exit_handler() done")
 
 
 atexit.register(exit_handler)
-
-# TODO add method to send database credentials
-# for now the defaults are used, when questdb is running locally
 
 
 def string_to_html(text):
@@ -150,9 +140,6 @@ def set_signature():
 
 @app.route("/start-monitor", methods=["GET", "POST"])
 def start_monitor():
-    # TODO check if signature and/or policy are already set
-    # if not check if they are sent with this request
-    # if neither return message to set first
     launch_msg = mon.launch()
     return {"launch message": launch_msg}
 
