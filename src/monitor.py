@@ -18,6 +18,7 @@ LOG_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
 class Monitor:
+    """Wrapper class for MonPoly """
     def __init__(self):
         # should the policy be negated?
         self.policy_negate = False
@@ -66,20 +67,32 @@ class Monitor:
         self.write_config()
 
     def write_server_log(self, msg: str):
-        # print(f'writing to server log: {self.log_path}')
-        # print(f'[{datetime.now().strftime(LOG_TIMESTAMP_FORMAT)}] {msg}')
+        """writes the given message to the server log along with a timestamp"""
         time_stamp = datetime.now().strftime(LOG_TIMESTAMP_FORMAT)
-        with open(self.log_path, "a") as log:
+        with open(self.log_path, "a", encoding="utf-8") as log:
             log.write(f"[{time_stamp}] {msg}\n")
 
     def check_monitorability(self, sig, pol):
+        """checks if the given policy is monitorable
+
+        Args:
+            sig (_type_): path to signature file
+            pol (_type_): path to policy file
+
+        Returns:
+            dict: dictionary with keys "monitorable" and "message"
+                "monitorable" is a boolean indicating if the policy is monitorable
+                "message" is a string containing the output of monpoly checking
+                    the monitorability of the policy
+        """
         self.write_server_log(f"checking monitorability of {sig} and {pol}")
         cmd = ["monpoly", "-check", "-sig", sig, "-formula", pol]
+        # TODO: potentially set check to tur and report error to user
         process = subprocess.run(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, check=False
         )
         response = process.stdout
-        with open(self.monitorability_log_path, "w") as log:
+        with open(self.monitorability_log_path, "w", encoding="utf-8") as log:
             log.write(response)
 
         if "The analyzed formula is monitorable." not in response:
@@ -88,8 +101,13 @@ class Monitor:
             return {"monitorable": True, "message": response}
 
     def get_monitorability_log(self):
+        """logged info on the monitorability of the current policy
+
+        Returns:
+            _type_: a string containing the monitorability log
+        """
         if os.path.exists(self.monitorability_log_path):
-            with open(self.monitorability_log_path, "r") as log:
+            with open(self.monitorability_log_path, "r", encoding="utf-8") as log:
                 return log.read()
         else:
             return "monitorability not yet checked"
@@ -103,6 +121,11 @@ class Monitor:
         return self.policy_path and os.path.exists(self.policy_path)
 
     def make_dirs(self, path):
+        """recursively creates all directories in the given path if they don't exist
+
+        Args:
+            path (_type_): a path to a directory
+        """
         if not os.path.exists(path):
             os.makedirs(path)
 
@@ -111,33 +134,60 @@ class Monitor:
         return not os.path.exists(self.sql_drop_path)
 
     def get_signature(self):
+        """get the signature
+
+        Returns:
+            _type_: either the signature or an error message or a string 
+                "no signature set"
+        """
         if os.path.exists(self.signature_path):
-            with open(self.signature_path, "r") as sig_file:
+            with open(self.signature_path, "r", encoding="utf-8") as sig_file:
                 return sig_file.read()
         else:
             return "no signature set"
 
     def get_json_signature(self):
+        """get the current signature as a json object
+
+        Returns:
+            _type_: a dictionary either containing a key 'json' with the json
+                signature or a key 'error' with an error message
+        """
         if os.path.exists(self.sig_json_path):
-            with open(self.sig_json_path, "r") as sig_json:
+            with open(self.sig_json_path, "r", encoding="utf-8") as sig_json:
                 return {"json": json.load(sig_json)}
         else:
             return {"error": "json signature not set yet"}
 
     def get_policy(self):
+        """get the policy being monitored
+
+        Returns:
+            _type_: the current policy being monitored
+        """
         policy = ""
         if not os.path.exists(self.policy_path):
             policy = "no policy set"
         else:
-            with open(self.policy_path, "r") as pol_file:
+            with open(self.policy_path, "r", encoding="utf-8") as pol_file:
                 policy = pol_file.read()
                 pol_file.close()
         return f'{"NOT" if self.policy_negate else ""} {policy}'
 
     def get_schema(self):
+        """get the database schema
+
+        Returns:
+            _type_: all tables in QuestDB
+        """
         return self.db.run_query("SHOW TABLES;", select=True)
 
     def get_config(self) -> dict:
+        """get the monitor configuration
+
+        Returns:
+            dict: dictionary of the current monitor config
+        """
         config = {
             "policy_negate": self.policy_negate,
             "db": self.db.get_config(),
@@ -150,6 +200,11 @@ class Monitor:
         return config
 
     def restore_db(self, conf):
+        """restores the database connection from the config file
+
+        Args:
+            conf (_type_): dictionary with the database configuration
+        """
         if "database" in conf.keys():
             self.db = DbHelper(conf["database"])
             self.write_server_log(
@@ -162,9 +217,10 @@ class Monitor:
             )
 
     def restore_state(self):
+        """restores the state of the monitor from the config file"""
         # TODO: when get_config() gets changed, change this as well
         if os.path.exists(self.conf_path):
-            with open(self.conf_path, "r") as conf_json:
+            with open(self.conf_path, "r", encoding="utf-8") as conf_json:
                 conf = json.load(conf_json)
                 self.policy_negate = conf["policy_negate"]
                 tp = conf["most_recent_timestamp"]
@@ -178,17 +234,28 @@ class Monitor:
             )
 
     def write_config(self):
+        """writes the current monitor config to disk
+        """
         conf = self.get_config()
-        with open(self.conf_path, "w") as conf_json:
+        with open(self.conf_path, "w", encoding="utf-8") as conf_json:
             conf_string = json.dumps(conf)
             conf_json.write(conf_string)
             self.write_server_log(f"wrote config: {conf_string}")
 
     def set_policy(self, policy, negate: bool = False):
+        """sets the policy to the given policy
+
+        Args:
+            policy (_type_): path to a policy file
+            negate (bool, optional): should the policy be negated?. Defaults to False.
+
+        Returns:
+            _type_: JSON style status message
+        """
         # as long as monpoly isn't running yet, the policy can still be changed
         if os.path.exists(self.policy_path) and self.monpoly:
             return {
-                "error": f"monpoly is already running and policy has been set. Use change_policy() to change the policy.",
+                "error": "monpoly is already running and policy has been set. Use change_policy() to change the policy.",
                 "ls pol_dir": os.listdir(self.policy_dir),
             }
         os.rename(policy, self.policy_path)
@@ -198,6 +265,14 @@ class Monitor:
         return {"message": f"policy set to {self.get_policy()}"}
 
     def get_relative_intervals(self, policy_path):
+        """uses monpoly to get the relative intervals for the predicates in the policy
+
+        Args:
+            policy_path (_type_): path to a policy file
+
+        Returns:
+            _type_: the relative intervals per predicate and constant attributes in JSON
+        """
         cmd = [
             "monpoly",
             "-relative_interval_per_predicate_json",
@@ -206,8 +281,9 @@ class Monitor:
             "-formula",
             policy_path,
         ]
+        # TODO potentially set check to True and report errors to user
         process = subprocess.run(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, check=False
         )
         response_1 = process.stdout
         self.write_server_log(f"get_relative_intervals({policy_path}):\n {response_1}")
@@ -219,8 +295,9 @@ class Monitor:
             "-formula",
             policy_path,
         ]
+        # TODO potentially set check to True and report errors to user
         process = subprocess.run(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, check=False
         )
         response_2 = process.stdout
         self.write_server_log(
@@ -231,16 +308,25 @@ class Monitor:
     def change_policy(
         self,
         new_policy_path: str,
-        negate: bool = False,
-        policy_change_method: str = "naive",
+        negate: bool = False
     ):
+        """changes the policy being monitored by monpoly
+
+        Args:
+            new_policy_path (str): path to the new policy
+            negate (bool, optional): whether or not the new policy should be negated.
+                Defaults to False.
+
+        Returns:
+            _type_: JSON style status message
+        """
         self.write_server_log(f"[change_policy()] negate: {negate}")
         if not os.path.exists(self.policy_path):
             self.write_server_log(
                 f"[change_policy()] no policy has previously been set: {self.policy_path}"
             )
             return {
-                "message": f"no policy has been set previously, use /set-policy to set it",
+                "message": "no policy has been set previously, use /set-policy to set it",
                 "ls pol_dir": os.listdir(self.policy_dir),
             }
 
@@ -257,10 +343,6 @@ class Monitor:
                 return {
                     "error": f"Retry again later. Most recent timestamp seen is not in database yet: {most_recent_db} < {self.most_recent_timestamp}"
                 }
-            # while most_recent_db is None or most_recent_db < self.most_recent_timestamp:
-            #     most_recent_db = self.get_most_recent_timestamp_from_db()
-            #     self.write_server_log(f'[change_policy()] waiting for most recent timestamp seen to be in database: {most_recent_db} < {self.most_recent_timestamp}')
-            #     time.sleep(10)
 
         relative_intervals = self.get_relative_intervals(new_policy_path)
 
@@ -278,13 +360,13 @@ class Monitor:
         self.stop_monpoly(save_state=False)
         if timepoints == []:
             self.write_server_log(
-                f"[change_policy()] no timepoints found, starting monpoly without reading old timepoints"
+                "[change_policy()] no timepoints found, starting monpoly without reading old timepoints"
             )
             self.monpoly = self.start_monpoly(self.signature_path, self.policy_path)
             self.write_server_log(f"[change_policy()] started monpoly")
         else:
             self.write_server_log(
-                f"[change_policy()] running monpoly and reading all past timepoints"
+                "[change_policy()] running monpoly and reading all past timepoints"
             )
             self.monpoly = self.start_monpoly(
                 self.signature_path, self.policy_path, log=timepoints_monpoly
@@ -295,7 +377,7 @@ class Monitor:
             output = ""
             while "## Done with log file - waiting for stdin ##" not in output:
                 self.write_server_log(
-                    f"[change_policy()] waiting for monpoly to finish"
+                    "[change_policy()] waiting for monpoly to finish"
                 )
                 output += self.monpoly.stdout.readline()
         self.clear_directory(self.events_dir)
@@ -308,6 +390,14 @@ class Monitor:
         return {"success": f"changed policy from {old_policy} to {self.get_policy()}"}
 
     def set_signature(self, sig):
+        """sets the signature of the monitor, sets the database schema
+
+        Args:
+            sig (_type_): path to a signature file
+
+        Returns:
+            _type_: JSON style status message
+        """
         # as long as monpoly isn't running yet, the policy can still be changed
         if os.path.exists(self.signature_path):
             if self.monpoly:
@@ -326,9 +416,18 @@ class Monitor:
         return {"message": f"signature set to {self.get_signature()}"}
 
     def create_json_signature(self, sig):
+        """asks monpoly to generate a json representation of the given signature
+
+        Args:
+            sig (_type_): path to a signature file
+
+        Returns:
+            _type_: json formatted signature
+        """
         cmd = ["monpoly", "-sig_to_json", sig]
-        with open(self.sig_json_path, "w") as json_sig:
-            process = subprocess.run(cmd, capture_output=True, text=True)
+        with open(self.sig_json_path, "w", encoding="utf-8") as json_sig:
+            # TODO possibly set check to True and report errors to the user
+            process = subprocess.run(cmd, capture_output=True, text=True, check=False)
             if process.stderr:
                 return {"error": f"create_json_signature: {process.stderr}"}
             json_sig.write(process.stdout)
@@ -336,14 +435,23 @@ class Monitor:
         return self.get_json_signature()
 
     def set_destruct_query(self, sig):
+        """asks monpoly to generate a drop query for the given signature
+
+        Args:
+            sig (_type_): path to a signature file
+
+        Returns:
+            _type_: JSON style status message
+        """
         cmd = ["monpoly", "-sql_drop", sig]
-        process = subprocess.run(cmd, capture_output=True, text=True)
+        # TODO possibly set check to True and report errors to the user
+        process = subprocess.run(cmd, capture_output=True, text=True, check=False)
         query_drop = process.stdout
         query_drop += self.ts_query_drop
         self.write_server_log(
             f"[get_destruct_query()] Generated drop query: {query_drop}"
         )
-        with open(self.sql_drop_path, "w") as drop_file:
+        with open(self.sql_drop_path, "w", encoding="utf-8") as drop_file:
             drop_file.write(query_drop)
         return {"drop query": query_drop, "drop file": self.sql_drop_path}
 
@@ -352,15 +460,29 @@ class Monitor:
         Creates a database from the given signature file
         """
         if verbose:
-            print(f"Creating database")
+            print("Creating database")
         cmd = ["monpoly", "-sql", sig]
-        process = subprocess.run(cmd, capture_output=True, text=True)
+        # TODO possibly set check to True and report errors to the user
+        process = subprocess.run(cmd, capture_output=True, text=True, check=False)
         query_create = process.stdout
         self.db.run_query(query_create)
         self.db.run_query(self.ts_query_create)
         return {"created tables": query_create + self.ts_query_create}
 
     def start_monpoly(self, sig, pol, restart: str = "", log: str = ""):
+        """starts monpoly with the given signature and policy
+
+        Args:
+            sig (_type_): path to a signature file
+            pol (_type_): path to a policy file
+            restart (str, optional): parameter whether this is a fresh start
+                or a restart. Defaults to "".
+            log (str, optional): path to a log file to be loaded,
+                is used for policy change. Defaults to "".
+
+        Returns:
+            _type_: _description_
+        """
         cmd = [
             "monpoly",
             "-unix",
@@ -442,7 +564,7 @@ class Monitor:
             self.write_server_log("launched monpoly")
             return f"successfully launched monpoly, pid: {self.get_monpoly_pid()}, args: {self.monpoly.args}"
         else:
-            return f"cannot restart monpoly, because it was not previously started"
+            return "cannot restart monpoly, because it was not previously started"
 
     def delete_database(self):
         """
@@ -450,7 +572,7 @@ class Monitor:
         """
         query = ""
         if not self.db_is_empty():
-            with open(self.sql_drop_path, "r") as drop_file:
+            with open(self.sql_drop_path, "r", encoding="utf-8") as drop_file:
                 query = drop_file.read()
                 drop_file.close()
         elif self.db_is_empty():
@@ -469,6 +591,11 @@ class Monitor:
         return {"query": query}
 
     def clear_directory(self, path):
+        """empties the given directory
+
+        Args:
+            path (_type_): path to the directory to be emptied
+        """
         self.write_server_log(f"clearing directory: {path}")
         for root, dirs, files in os.walk(path, topdown=False):
             for file in files:
@@ -477,11 +604,22 @@ class Monitor:
                 os.rmdir(os.path.join(root, dir))
 
     def delete_config(self):
+        """deletes the config file
+
+        Returns:
+            _type_: json style status message
+        """
         if os.path.exists(self.conf_path):
             os.remove(self.conf_path)
         return {"config": f"deleted {self.conf_path}"}
 
     def delete_everything(self):
+        """stops the monitor, clears the database, clears the config,
+        empties config directories
+
+        Returns:
+            _type_: JSON style status message
+        """
         stop_log = self.stop_monpoly(save_state=False)
         drop_log = self.delete_database()
         conf_log = self.delete_config()
@@ -495,6 +633,15 @@ class Monitor:
         return {"deleted everything": "done"} | drop_log | stop_log | conf_log
 
     def stop_monpoly(self, save_state: bool = True):
+        """this stops monpoly and saves the state if save_state is True
+
+        Args:
+            save_state (bool, optional): parameter whether or not to save the 
+                state of monpoly. Defaults to True.
+
+        Returns:
+            _type_: JSON style status message
+        """
         self.write_server_log("[stop()] stopping monpoly")
         log = dict()
         if not self.monpoly or self.monpoly.poll():
@@ -530,12 +677,23 @@ class Monitor:
         return {"stopped": "stopped monpoly"} | log
 
     def get_monpoly_pid(self):
+        """returns the process id of monpoly
+
+        Returns:
+            _type_: the pid of monpoly or an error message if monpoly is not running
+        """
         if self.monpoly:
             return self.monpoly.pid
         else:
-            return f"monpoly not running"
+            return "monpoly not running"
 
     def get_monpoly_exit_code(self):
+        """returns the exit code of monpoly
+
+        Returns:
+            _type_: the exit code of monpoly or an error message if monpoly is still 
+                running or has not been started yet
+        """
         if self.monpoly:
             exit_code = self.monpoly.poll()
             if exit_code is not None:
@@ -545,18 +703,33 @@ class Monitor:
         else:
             return "monpoly not running (yet)"
 
-    def write_monpoly_log(self, log):
-        with open(self.monpoly_stdout_path, "a") as monpoly_log:
+    def write_monpoly_log(self, log: str):
+        """writes the stdout of monpoly to a file
+
+        Args:
+            log (str): the output to log
+        """
+        with open(self.monpoly_stdout_path, "a", encoding="utf-8") as monpoly_log:
             monpoly_log.write(log)
 
-    def get_stdout(self):
+    def get_stdout(self) -> str:
+        """reads the stdout of monpoly
+
+        Returns:
+            str: the stdout of monpoly or an error message if the 
+                stdout does not exist
+        """
         if not os.path.exists(self.monpoly_stdout_path):
             return "error stdout log does not exist"
         with open(self.monpoly_stdout_path, "r") as stdout:
             return stdout.read() or "stdout is empty"
 
     def get_most_recent_timestamp_from_db(self):
-        # TODO alternative to try/except is checking if dv is empty first
+        """queries the most recent time stamp from any predictate in the database
+
+        Returns:
+            _type_: the most recent time stamp seen by the database
+        """
         try:
             t = self.db.run_query("SELECT MAX(time_stamp) FROM ts;", select=True)
             if t:
@@ -599,6 +772,14 @@ class Monitor:
         return {"events": timepoints}
 
     def send_timepoint_to_monpoly(self, event_str: str):
+        """sends the given events to MonPoly
+
+        Args:
+            event_str (str): string of events formatted as MonPoly input
+
+        Returns:
+            _type_: JSON style response message
+        """
         if self.monpoly:
             if self.monpoly.stdin and self.monpoly.stdout:
                 self.write_server_log(
@@ -622,14 +803,14 @@ class Monitor:
                     f"[send_events_to_monpoly({event_str})] monpoly done - stdout: {result}"
                 )
                 return {"success": f'sent "{event_str}" to monpoly', "output": result}
-            else:
-                self.write_server_log(
-                    f"could not access stdin or stdout of monpoly (stdout:{self.monpoly.stdout}, stdin:{self.monpoly.stdin})"
-                )
-                return {"error": "Error while logging events monpoly stdin is None"}
-        else:
-            self.write_server_log("error: monpoly is not running")
-            return {"error": "Monpoly is not running"}
+
+            self.write_server_log(
+                f"could not access stdin or stdout of monpoly (stdout:{self.monpoly.stdout}, stdin:{self.monpoly.stdin})"
+            )
+            return {"error": "Error while logging events monpoly stdin is None"}
+
+        self.write_server_log("error: monpoly is not running")
+        return {"error": "Monpoly is not running"}
 
     def create_log_strings(self, timepoints: list, output_file=None):
         """
@@ -660,7 +841,7 @@ class Monitor:
             monpoly_string += ";\n"
             timepoint["monpoly-string"] = monpoly_string
             if output_file is not None:
-                with open(output_file, "a") as f:
+                with open(output_file, "a", encoding="utf-8") as f:
                     f.write(monpoly_string)
 
             self.write_server_log(
@@ -669,6 +850,15 @@ class Monitor:
         return timepoints
 
     def tuple_str_from_list(self, l: list) -> str:
+        """converts a list into a string that can be used as a tuple in monpoly.
+        Importantly it doesn't have a trailing comma before the closing bracket
+
+        Args:
+            l (list): lsit of attributes
+
+        Returns:
+            str: tuple string for monpoly (e.g. (1, 2, 3))
+        """
         l_str = [str(x) for x in l]
         return "(" + ", ".join(l_str) + ")"
 
@@ -691,13 +881,24 @@ class Monitor:
             ts = timestamp_now
         return int(ts.timestamp())
 
-    def log_timepoints(self, timepoints_json: str):
+    def log_timepoints(self, timepoints_json: str) -> dict:
+        """logs the events in the given json file
+        first checking the JSON formatting, then sending it to MonPoly and if
+        MonPoly accepts it, it is written to the database
+
+        Args:
+            timepoints_json (str): path to the json file containing the events
+
+        Returns:
+            dict: JSON style response dcitionary with either success message
+                or error message
+        """
         # get current time at this point, so all events with a missing timestamp are logged with the same timestamp
         self.write_server_log(
             f"[log_timepoints()] started logging events: {timepoints_json}"
         )
         timestamp_now = datetime.now()
-        with open(timepoints_json) as f:
+        with open(timepoints_json, encoding="utf-8") as f:
             try:
                 timepoints = json.load(f)
                 timepoints = [
@@ -733,18 +934,24 @@ class Monitor:
                 self.write_server_log(f"stored events in db: {db_response}")
 
                 return {"skipped-timepoints": skip_log}
-                # return {'db-response': db_response,
-                #         'skipped-timepoints': skip_log}
 
-            except ValueError as e:
-                print(f"error parsing json file: {e}")
-                self.write_server_log(f"error parsing json file: {e}")
+            except ValueError as error:
+                self.write_server_log(f"error parsing json file: {error}")
                 self.clear_directory(self.events_dir)
-                return {"error": f"Error while parsing events JSON {e}"}
+                return {"error": f"Error while parsing events JSON {error}"}
 
     def db_response_to_timepoints(self, db_response: list) -> list:
+        """converts the response from the database to a list of timepoints
+        in the same format that the wrapper uses as input
+
+        Args:
+            db_response (list): a list responses to a number of SQL queries
+
+        Returns:
+            list: a list of evenets per time point in a JSON style list of dictionaries
+        """
         self.write_server_log(
-            f"[db_response_to_timepoints()] converting db response to timepoints"
+            "[db_response_to_timepoints()] converting db response to timepoints"
         )
         db_response_dict = {k: v for d in db_response for k, v in d.items()}
         if db_response_dict["ts"] is not None:
@@ -783,6 +990,17 @@ class Monitor:
         return result
 
     def parse_masked_interval(self, mask: list, interval: str) -> str:
+        """combines a list of mask values and a string represntation of an interval
+        into a SQL query suffix
+
+        Args:
+            mask (list): list of constant predicate attributs. None if the 
+                attribute at the given position is not constant
+            interval (str): string representation of an interval (e.g. "[1,2)")
+
+        Returns:
+            str: a SQL query constraint (e.g. "(x1 = 1 AND x2 = 2 AND [1,2))")
+        """
         named_mask = [
             (f"x{i+1} = {y}", interval)
             for (i, y), interval in zip(enumerate(mask), interval)
@@ -794,6 +1012,15 @@ class Monitor:
         return f"({mask_query} AND {interval})"
 
     def parse_interval(self, i: str) -> str:
+        """pareses a string representation of an interval into a SQL query suffix
+        (e.g. "(1,2)" -> "time_stamp > '1970-01-01 00:00:01' AND time_stamp < '1970-01-01 00:00:02'")
+
+        Args:
+            i (str): the string representation of the interval
+
+        Returns:
+            str: the SQL query suffix
+        """
         is_lower_open = i[0] == "("
         is_upper_open = i[-1] == ")"
         bounds = i[1:-1].split(",")
@@ -807,12 +1034,23 @@ class Monitor:
             query = f'time_stamp {"<" if is_upper_open else "<="} \'{upper}\''
         else:
             query = f'time_stamp {">" if is_lower_open else ">="} \'{lower}\' AND time_stamp {"<" if is_upper_open else "<="} \'{upper}\''
-        # print(query)
         return query
 
     def relative_intervals_to_query_per_predicate(
         self, predicate_name: str, intervals: list
     ) -> str:
+        """creates a query for a given predicate and its masked relative intervals
+
+        Args:
+            predicate_name (str): the name of the predicate
+            intervals (list): list of dictionaries with keys "mask" and "interval"
+                the mask part are the constant values and the interval is the
+                relative interval corresponding to the predicate with the constant
+                values given by the mask
+
+        Returns:
+            str: a single SQL query for the given predicate and its masked relative intervals
+        """
         prefix = f"SELECT * FROM {predicate_name} WHERE "
         conditions = []
         for masked_interval in intervals:
@@ -826,8 +1064,20 @@ class Monitor:
         return prefix + suffix
 
     def relative_intervals_to_query(
-        self, relative_intervals: list
+        self, relative_intervals: tuple
     ) -> list[tuple[str, str]]:
+        """for the given predicates and their relative intervals, this generates
+        SQL queries corresponding to those relative intervals and the predicates
+
+        Args:
+            relative_intervals (tuple): tuple of the relative interval for the whole 
+                formula and a list of dictionaries containint the relative intervals
+                for each predicate in the formula
+
+        Returns:
+            list[tuple[str, str]]: list of tuples with one query for each predicate
+                and the ts table (a kind of internal predicate)
+        """
         queries = []
         rl, rls = relative_intervals
         for predicate in rls:
@@ -835,7 +1085,6 @@ class Monitor:
             intervals = predicate["intervals"]
             query = self.relative_intervals_to_query_per_predicate(name, intervals)
             queries.append((name, query))
-        # TODO also query all timepoints in `ts` for the entire relative interval
         parsed_interval = self.parse_interval(rl)
         query = f"SELECT * FROM ts WHERE {parsed_interval};"
         queries.append(("ts", query))
@@ -844,6 +1093,16 @@ class Monitor:
     def queries_from_dates(
         self, start_date=None, end_date=None
     ) -> list[tuple[str, str]]:
+        """generates a list of tuples containing predicate name and a SQL query
+        that returns all the occurrences of that predicate in the given time interval
+
+        Args:
+            start_date (_type_, optional): Defaults to None.
+            end_date (_type_, optional): Defaults to None.
+
+        Returns:
+            list[tuple[str, str]]: list of tuples of predicate name and SQL query
+        """
         queries = []
         names = []
         if os.path.exists(self.sig_json_path):
@@ -871,9 +1130,17 @@ class Monitor:
     def get_events(
         self, relative_intervals=None, start_date=None, end_date=None
     ) -> list:
-        """
-        returns all events in the database in the same json format
-        that this backend takes as input
+        """ retrieves all events in the database
+
+        Args:
+            relative_intervals (_type_, optional): 
+                if this is provided for each predicate only the events 
+                in its relative interval are retrieved. Defaults to None.
+            start_date (_type_, optional): Defaults to None.
+            end_date (_type_, optional): Defaults to None.
+
+        Returns:
+            list: all events in the database
         """
         queries = []
         if relative_intervals is not None:
