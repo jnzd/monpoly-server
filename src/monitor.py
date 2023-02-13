@@ -7,6 +7,7 @@ from dateutil.parser import ParserError
 import psycopg2
 from questdb.ingress import Buffer, Sender
 from db_helper import DbHelper
+import time
 
 # if this path is absolute all subsequent paths are relative to this path
 # will be absolute paths
@@ -15,6 +16,8 @@ dname = os.path.dirname(abspath)
 os.chdir(dname)
 CONFIG_DIR = os.path.abspath("./monitor-data/")
 LOG_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+MONPOLY = './monpoly'
 
 
 class Monitor:
@@ -86,7 +89,7 @@ class Monitor:
                     the monitorability of the policy
         """
         self.write_server_log(f"checking monitorability of {sig} and {pol}")
-        cmd = ["monpoly", "-check", "-sig", sig, "-formula", pol]
+        cmd = [MONPOLY, "-check", "-sig", sig, "-formula", pol]
         # TODO: potentially set check to tur and report error to user
         process = subprocess.run(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, check=False
@@ -274,7 +277,7 @@ class Monitor:
             _type_: the relative intervals per predicate and constant attributes in JSON
         """
         cmd = [
-            "monpoly",
+            MONPOLY,
             "-relative_interval_per_predicate_json",
             "-sig",
             self.signature_path,
@@ -288,7 +291,7 @@ class Monitor:
         response_1 = process.stdout
         self.write_server_log(f"get_relative_intervals({policy_path}):\n {response_1}")
         cmd = [
-            "monpoly",
+            MONPOLY,  
             "-get_relative_interval",
             "-sig",
             self.signature_path,
@@ -339,10 +342,11 @@ class Monitor:
 
         if self.most_recent_timestamp is not None:
             most_recent_db = self.get_most_recent_timestamp_from_db()
-            if most_recent_db is None or most_recent_db < self.most_recent_timestamp:
+            most_recent_timestamp_utc = datetime.utcfromtimestamp(time.mktime(self.most_recent_timestamp.timetuple()))
+            if most_recent_db is None or most_recent_db < most_recent_timestamp_utc:
                 return {
-                    "error": f"Retry again later. Most recent timestamp seen is not in database yet: {most_recent_db} < {self.most_recent_timestamp}"
-                }
+                "error": f"Retry again later. Most recent timestamp seen is not in database yet: {most_recent_db} < {most_recent_timestamp_utc}"
+            }
 
         relative_intervals = self.get_relative_intervals(new_policy_path)
 
@@ -354,6 +358,7 @@ class Monitor:
         self.write_server_log(
             f"[change_policy()] changed policy from {old_policy} to {self.get_policy()}"
         )
+#        timepoints = self.get_events()
         timepoints = self.get_events(relative_intervals=relative_intervals)
         timepoints_monpoly = os.path.join(self.events_dir, "events_policy_change.log")
         self.create_log_strings(timepoints, output_file=timepoints_monpoly)
@@ -427,7 +432,7 @@ class Monitor:
         Returns:
             _type_: json formatted signature
         """
-        cmd = ["monpoly", "-sig_to_json", sig]
+        cmd = [MONPOLY, "-sig_to_json", sig]
         with open(self.sig_json_path, "w", encoding="utf-8") as json_sig:
             # TODO possibly set check to True and report errors to the user
             process = subprocess.run(cmd, capture_output=True, text=True, check=False)
@@ -446,7 +451,7 @@ class Monitor:
         Returns:
             _type_: JSON style status message
         """
-        cmd = ["monpoly", "-sql_drop", sig]
+        cmd = [MONPOLY, "-sql_drop", sig]
         # TODO possibly set check to True and report errors to the user
         process = subprocess.run(cmd, capture_output=True, text=True, check=False)
         query_drop = process.stdout
@@ -464,7 +469,7 @@ class Monitor:
         """
         if verbose:
             print("Creating database")
-        cmd = ["monpoly", "-sql", sig]
+        cmd = [MONPOLY, "-sql", sig]
         # TODO possibly set check to True and report errors to the user
         process = subprocess.run(cmd, capture_output=True, text=True, check=False)
         query_create = process.stdout
@@ -487,7 +492,7 @@ class Monitor:
             _type_: _description_
         """
         cmd = [
-            "monpoly",
+            MONPOLY,
             "-unix",
             "-ack_sep",
             "-ignore_parse_errors",

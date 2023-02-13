@@ -1,0 +1,12 @@
+(executable
+  (name gen)
+  (public_name gen)
+  (package gen)
+  (libraries str unix dune-build-info owl))
+
+(ocamllex log_lexer)
+(ocamlyacc log_parser)
+
+(env
+  (release
+    (flags (:standard -noassert))))

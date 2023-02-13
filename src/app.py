@@ -299,3 +299,6 @@ def db_get_influxdb_port():
 @app.route("/db-get-database", methods=["GET"])
 def db_get_database():
     return {"response": mon.db.get_database()}
+    
+if __name__ == '__main__':
+  app.run()

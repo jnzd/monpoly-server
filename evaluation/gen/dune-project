@@ -1,0 +1,12 @@
+(lang dune 2.8)
+(name gen)
+
+(generate_opam_files true)
+(cram enable)
+
+(package
+  (name gen)
+  (depends
+    (ocaml (>= 4.11))
+    (dune (>= 2.8))
+    dune-build-info))

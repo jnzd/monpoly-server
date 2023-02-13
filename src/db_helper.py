@@ -1,16 +1,20 @@
 import psycopg2 as pg
 
+USER     = "admin"
+PASSWORD = "quest"
+HOST     = "localhost" # questdb
+DATABASE = "qdb"
 
 class DbHelper:
     def __init__(
         self,
         config=None,
-        user="admin",
-        password="quest",
-        host="questdb",
+        user=USER,
+        password=PASSWORD,
+        host=HOST,
         port_pgsql_wire=8812,
         port_influxdb_line=9009,
-        database="qdb",
+        database=DATABASE,
     ):
         if config:
             if "user" in config.keys():
