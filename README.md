@@ -1,6 +1,6 @@
 # Monpoly Server
 
-This project provides a python backend for MonPoly (https://bitbucket.org/jshs/monpol). It requires an instance of a QuestDB database (https://questdb.io/get-questdb/).
+This project provides a python backend for MonPoly (https://bitbucket.org/jshs/monpoly). It requires an instance of a QuestDB database (https://questdb.io/get-questdb/).
 
 
 
