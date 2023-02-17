@@ -107,8 +107,9 @@ def change_policy():
         path = os.path.join(mon.policy_dir, filename)
         pol_file.save(path)
         negate = "negate" in request.form
+        naive = "naive" in request.form
         # TODO later check for parameter specifying policy change method
-        return mon.change_policy(path, negate)
+        return mon.change_policy(path, negate, naive)
 
 
 @app.route("/get-signature", methods=["GET", "POST"])

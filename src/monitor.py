@@ -319,7 +319,8 @@ class Monitor:
     def change_policy(
         self,
         new_policy_path: str,
-        negate: bool = False
+        negate: bool = False,
+        naive: bool = False
     ):
         """changes the policy being monitored by monpoly
 
@@ -327,9 +328,12 @@ class Monitor:
             new_policy_path (str): path to the new policy
             negate (bool, optional): whether or not the new policy should be negated.
                 Defaults to False.
+            naive (bool, optional): whether or not the naive approach of reloacing
+                the complete trace should be used
+                Defaults to False.
 
         Returns:
-            _type_: JSON style status message
+            dict: JSON style status message
         """
         self.write_server_log(f"[change_policy()] negate: {negate}")
         if not os.path.exists(self.policy_path):
@@ -360,13 +364,15 @@ class Monitor:
         old_policy = self.get_policy()
         os.rename(new_policy_path, self.policy_path)
         self.policy_negate = negate
-        # update negation in config
+       # update negation in config
         self.write_config()
         self.write_server_log(
             f"[change_policy()] changed policy from {old_policy} to {self.get_policy()}"
         )
-        # timepoints = self.get_events()
-        timepoints = self.get_events(relative_intervals=relative_intervals)
+        if naive:
+            timepoints = self.get_events()
+        else:
+            timepoints = self.get_events(relative_intervals=relative_intervals)
         timepoints_monpoly = os.path.join(self.events_dir, "events_policy_change.log")
         self.create_log_strings(timepoints, output_file=timepoints_monpoly)
         self.stop_monpoly(save_state=False)
@@ -770,7 +776,7 @@ class Monitor:
         except psycopg2.DatabaseError:
             return None
 
-    def get_most_recent_timepoint_from_db(self):
+    def get_most_recent_timepoint_from_db(self) -> int:
         """queries the most recent time point (index) in the database
 
         Returns:
@@ -782,7 +788,7 @@ class Monitor:
                 return -1
             # database query result comes as a list of list
             # one list per table
-            return t['response'][0][0]
+            return int(t['response'][0][0])
         except psycopg2.DatabaseError:
             return -1
 
