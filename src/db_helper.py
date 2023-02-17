@@ -2,7 +2,7 @@ import psycopg2 as pg
 
 USER     = "admin"
 PASSWORD = "quest"
-HOST     = "localhost" # questdb
+HOST     = "questdb" # localhost
 DATABASE = "qdb"
 
 class DbHelper:
@@ -61,13 +61,10 @@ class DbHelper:
         )
         return connection
 
-    def run_query(self, query: str, select: bool = False, verbose: bool = False):
+    def run_query(self, query: str, select: bool = False,) -> dict:
         """
         Runs the given SQL query on the database
         """
-        if verbose:
-            print(f"Running query: {query}")
-
         connection = None
         cursor = None
         try:
@@ -75,15 +72,19 @@ class DbHelper:
             cursor = connection.cursor()
             cursor.execute(query)
             if select:
-                return cursor.fetchall()
+                return {"response": cursor.fetchall()}
+            else:
+                return {"response": "successfully executed query: " + query}
+        # except pg.OperationalError as error:
+        # except pg.DatabaseError as error:
+        except Exception as error:
+            return{"error": str(error)}
 
         finally:
             if cursor:
                 cursor.close()
             if connection:
                 connection.close()
-            if verbose:
-                print("Postgres connection is closed.")
 
     def set_user(self, user: str):
         self.user = user
