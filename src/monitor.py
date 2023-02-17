@@ -618,7 +618,7 @@ class Monitor:
         query_response = self.db.run_query(query)
         os.remove(self.sql_drop_path)
         if "error" in query_response.keys():
-            return query_response["error"]
+            return query_response
         return {"query": query}
 
     def clear_directory(self, path):
@@ -674,7 +674,7 @@ class Monitor:
                 state of monpoly. Defaults to True.
 
         Returns:
-            _type_: JSON style status message
+            dict: JSON style status message
         """
         self.write_server_log("[stop()] stopping monpoly")
         log = dict()
