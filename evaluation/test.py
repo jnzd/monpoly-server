@@ -217,7 +217,7 @@ if __name__ == "__main__":
 
             test_wrapper(TEMP_TRACE)
 
-            t_baseline = change_policy(TEMP_FORMULA, naive)
+            t_baseline = change_policy(TEMP_FORMULA, naive=True)
 
             stop_wrapper(wrapper)
 
