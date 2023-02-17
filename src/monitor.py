@@ -17,7 +17,8 @@ os.chdir(dname)
 CONFIG_DIR = os.path.abspath("./monitor-data/")
 LOG_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
 
-MONPOLY = './monpoly'
+# MONPOLY = './monpoly'
+MONPOLY = 'monpoly'
 
 
 class Monitor:
@@ -59,11 +60,12 @@ class Monitor:
         )
 
         self.most_recent_timestamp = None
+        self.most_recent_timepoint = -1
         # second column isn't necessary for the functionality of the backend,
         # but questdb doesn't currently (2022-11-17) support tables with only
         # timestamp column:
         # https://github.com/questdb/questdb/issues/2691
-        self.ts_query_create = "CREATE TABLE ts(dummy_column BYTE,time_stamp TIMESTAMP) timestamp(time_stamp) PARTITION BY DAY;"
+        self.ts_query_create = "CREATE TABLE ts(time_point INT,time_stamp TIMESTAMP) timestamp(time_stamp) PARTITION BY DAY;"
         self.ts_query_drop = "DROP TABLE ts;"
         self.monpoly = None
         self.restore_state()
@@ -183,7 +185,11 @@ class Monitor:
         Returns:
             _type_: all tables in QuestDB
         """
-        return self.db.run_query("SHOW TABLES;", select=True)
+        db_response = self.db.run_query("SHOW TABLES;", select=True)
+        if "error" in db_response.keys():
+            return db_response["error"]
+        else:
+            return db_response["response"]
 
     def get_config(self) -> dict:
         """get the monitor configuration
@@ -199,6 +205,7 @@ class Monitor:
             )
             if self.most_recent_timestamp
             else None,
+            "most_recent_timepoint": self.most_recent_timepoint,
         }
         return config
 
@@ -226,9 +233,10 @@ class Monitor:
             with open(self.conf_path, "r", encoding="utf-8") as conf_json:
                 conf = json.load(conf_json)
                 self.policy_negate = conf["policy_negate"]
-                tp = conf["most_recent_timestamp"]
-                if tp is not None:
-                    self.most_recent_timestamp = parser.parse(tp)
+                ts = conf["most_recent_timestamp"]
+                if ts is not None:
+                    self.most_recent_timestamp = parser.parse(ts)
+                self.most_recent_timepoint = conf["most_recent_timepoint"]
                 self.restore_db(conf)
                 self.write_server_log(f"[restore_state()] restored state with: {conf}")
         else:
@@ -339,14 +347,13 @@ class Monitor:
                 "[change_policy()] cannot change policy, because policy is not monitorable"
             )
             return {"error": check["message"]}
-
-        if self.most_recent_timestamp is not None:
-            most_recent_db = self.get_most_recent_timestamp_from_db()
-            most_recent_timestamp_utc = datetime.utcfromtimestamp(time.mktime(self.most_recent_timestamp.timetuple()))
-            if most_recent_db is None or most_recent_db < most_recent_timestamp_utc:
+        # the events often take a while to propagate to the database and therefore a check is necessary if the most recent event is already in the database
+        if self.most_recent_timepoint > -1:
+            most_recent_timepoint_db = self.get_most_recent_timepoint_from_db()
+            if most_recent_timepoint_db < self.most_recent_timepoint:
                 return {
-                "error": f"Retry again later. Most recent timestamp seen is not in database yet: {most_recent_db} < {most_recent_timestamp_utc}"
-            }
+                    "error": f"Retry again later. Most recent timepoint seen is not in database yet: {most_recent_timepoint_db} (database) < {self.most_recent_timepoint} (monitor)"
+                }
 
         relative_intervals = self.get_relative_intervals(new_policy_path)
 
@@ -358,7 +365,7 @@ class Monitor:
         self.write_server_log(
             f"[change_policy()] changed policy from {old_policy} to {self.get_policy()}"
         )
-#        timepoints = self.get_events()
+        # timepoints = self.get_events()
         timepoints = self.get_events(relative_intervals=relative_intervals)
         timepoints_monpoly = os.path.join(self.events_dir, "events_policy_change.log")
         self.create_log_strings(timepoints, output_file=timepoints_monpoly)
@@ -416,7 +423,9 @@ class Monitor:
                 self.delete_database()
         os.rename(sig, self.signature_path)
         if not db_exists:
-            self.init_database(self.signature_path)
+            create_response = self.init_database(self.signature_path)
+            if 'error' in create_response.keys():
+                return create_response
         self.set_destruct_query(self.signature_path)
         self.create_json_signature(self.signature_path)
         self.write_server_log(f"set signature: {self.get_signature()}")
@@ -463,19 +472,22 @@ class Monitor:
             drop_file.write(query_drop)
         return {"drop query": query_drop, "drop file": self.sql_drop_path}
 
-    def init_database(self, sig, verbose: bool = True):
+    def init_database(self, sig):
         """
         Creates a database from the given signature file
         """
-        if verbose:
-            print("Creating database")
         cmd = [MONPOLY, "-sql", sig]
         # TODO possibly set check to True and report errors to the user
         process = subprocess.run(cmd, capture_output=True, text=True, check=False)
         query_create = process.stdout
-        self.db.run_query(query_create)
-        self.db.run_query(self.ts_query_create)
-        return {"created tables": query_create + self.ts_query_create}
+        create_response1 = self.db.run_query(query_create)
+        if 'error' in create_response1.keys():
+            return create_response1
+        create_response2 = self.db.run_query(self.ts_query_create)
+        if 'error' in create_response2.keys():
+            # TODO delete already created tables
+            return create_response1 | create_response2
+        return {"success": create_response1['response'] + " & " + create_response2['response']}
 
     def start_monpoly(self, sig, pol, restart: str = "", log: str = ""):
         """starts monpoly with the given signature and policy
@@ -573,7 +585,7 @@ class Monitor:
         if not restart:
             self.monpoly = self.start_monpoly(self.signature_path, self.policy_path)
             self.write_server_log("launched monpoly")
-            return f"successfully launched monpoly, pid: {self.get_monpoly_pid()}, args: {self.monpoly.args}"
+            return {"pid": self.get_monpoly_pid(), "args": self.monpoly.args}
         else:
             return "cannot restart monpoly, because it was not previously started"
 
@@ -597,8 +609,10 @@ class Monitor:
         )
 
         # TODO prompt user before running this query and deleting all tables
-        self.db.run_query(query)
+        query_response = self.db.run_query(query)
         os.remove(self.sql_drop_path)
+        if "error" in query_response.keys():
+            return query_response["error"]
         return {"query": query}
 
     def clear_directory(self, path):
@@ -639,6 +653,9 @@ class Monitor:
         self.clear_directory(self.events_dir)
         self.clear_directory(self.monpoly_stdout_dir)
         self.clear_directory(self.sql_dir)
+        self.most_recent_timestamp = None
+        self.most_recent_timepoint = -1
+        self.write_config()
         if os.path.exists(self.monitor_state_path):
             os.remove(self.monitor_state_path)
         return {"deleted everything": "done"} | drop_log | stop_log | conf_log
@@ -736,19 +753,38 @@ class Monitor:
             return stdout.read() or "stdout is empty"
 
     def get_most_recent_timestamp_from_db(self):
-        """queries the most recent time stamp from any predictate in the database
+        """queries the most recent time stamp in the database
 
         Returns:
             _type_: the most recent time stamp seen by the database
         """
         try:
             t = self.db.run_query("SELECT MAX(time_stamp) FROM ts;", select=True)
+            if 'error' in t.keys():
+                return None
+            t = t['response']
             if t:
                 return t[0][0]
             else:
                 return None
         except psycopg2.DatabaseError:
             return None
+
+    def get_most_recent_timepoint_from_db(self):
+        """queries the most recent time point (index) in the database
+
+        Returns:
+            _type_: the most recent time stamp seen by the database
+        """
+        try:
+            t = self.db.run_query("SELECT MAX(time_point) FROM ts;", select=True)
+            if 'error' in t.keys():
+                return -1
+            # database query result comes as a list of list
+            # one list per table
+            return t['response'][0][0]
+        except psycopg2.DatabaseError:
+            return -1
 
     def store_timepoints_in_db(self, timepoints: list):
         """logs the given events in the database"""
@@ -757,10 +793,8 @@ class Monitor:
             if "skip" in timepoint.keys():
                 continue
             ts = datetime.fromtimestamp(timepoint["timestamp-int"])
-            # dummy_column is necessary, because questdb doesn't support tables
-            # with only one timestamp column (in combination with the influxDB Line Protocol)
-            # https://github.com/questdb/questdb/issues/2691
-            buf.row("ts", symbols=None, columns={"dummy_column": 0}, at=ts)
+            tp = self.most_recent_timepoint + 1
+            buf.row("ts", symbols=None, columns={"time_point": tp}, at=ts)
             for p in timepoint["predicates"]:
                 if "name" not in p.keys():
                     return {"log_events error": 'predicate must have a "name"'}
@@ -769,11 +803,12 @@ class Monitor:
                     break
                 name = p["name"]
                 for occ in p["occurrences"]:
-                    columns = {"dummy_column": 0} | {
+                    columns = {"time_point": tp} | {
                         f"x{i+1}": o for i, o in enumerate(occ)
                     }
                     buf.row(name, symbols=None, columns=columns, at=ts)
                 self.most_recent_timestamp = ts
+                self.most_recent_timepoint = tp
         # update config after going over all timestamps
         self.write_config()
         with Sender(self.db.host, self.db.port_influxdb) as sender:
@@ -916,7 +951,8 @@ class Monitor:
                     {"timestamp-int": self.get_timestamp(e, timestamp_now)} | e
                     for e in timepoints
                 ]
-                list.sort(timepoints, key=lambda e: e["timestamp-int"])
+                # TODO don't sort - leave order of time points up to user and skip if out of order
+                # list.sort(timepoints, key=lambda e: e["timestamp-int"])
                 timepoints = self.create_log_strings(timepoints)
 
                 skip_log = {}
@@ -984,12 +1020,13 @@ class Monitor:
                 continue
             for occurrence in db_response_dict[predicate_name]:
                 ts = int(occurrence[-1].timestamp())
-                # the first value in `occurence` is from `dummy_column`
-                # the last value in `occurence` is the timestamp
+                # TODO work with time_point column
                 if predicate_name in result[ts]["predicates"].keys():
-                    result[ts]["predicates"][predicate_name].append(occurrence[1:-1])
+                    result[ts]["predicates"][predicate_name].append(occurrence[0:-2])
+                    result[ts]["timepoint"] = occurrence[-2]
                 else:
-                    result[ts]["predicates"][predicate_name] = [occurrence[1:-1]]
+                    result[ts]["predicates"][predicate_name] = [occurrence[0:-2]]
+                    result[ts]["timepoint"] = occurrence[-2]
 
         result = [v for _, v in result.items()]
         for t in result:
@@ -1032,11 +1069,20 @@ class Monitor:
         Returns:
             str: the SQL query suffix
         """
+        if self.most_recent_timestamp is not None:
+            t = datetime.timestamp(self.most_recent_timestamp)
+        else:
+            t = 0
+
         is_lower_open = i[0] == "("
         is_upper_open = i[-1] == ")"
         bounds = i[1:-1].split(",")
-        upper = datetime.utcfromtimestamp(int(bounds[1]))
-        lower = datetime.utcfromtimestamp(int(bounds[0]))
+        # upper = datetime.utcfromtimestamp(int(bounds[1]) + t)
+        # upper = datetime.utcfromtimestamp(t)
+        # The upper bound is always the current time, `t`, as there
+        upper_int = min(int(bounds[1]) + t, t)
+        upper = datetime.utcfromtimestamp(upper_int)
+        lower = datetime.utcfromtimestamp(int(bounds[0]) + t)
         if upper == "*" and lower == "*":
             query = ""
         elif upper == "*":
@@ -1082,7 +1128,7 @@ class Monitor:
 
         Args:
             relative_intervals (tuple): tuple of the relative interval for the whole 
-                formula and a list of dictionaries containint the relative intervals
+                formula and a list of dictionaries containing the relative intervals
                 for each predicate in the formula
 
         Returns:
@@ -1162,8 +1208,11 @@ class Monitor:
         results = []
         for predicate_name, query in queries:
             self.write_server_log(f"    running query: {query}")
-            response = self.db.run_query(query)
-            results.append({predicate_name: response})
+            response = self.db.run_query(query, select=True)
+            if 'error' in response.keys():
+                return response['error']
+            results.append({predicate_name: response['response']})
 
+        print(results)
         monpoly_log = self.db_response_to_timepoints(results)
         return monpoly_log
