@@ -38,7 +38,7 @@ def string_to_html(text):
     return text.replace("\n", "<br>")
 
 
-@app.route("/", methods=["GET"])
+@app.route("/", methods=["GET", "POST"])
 def index():
     content = f""" 
         <h1>Monpoly Backend</h1>
@@ -49,6 +49,10 @@ def index():
         <h2>Database schema</h2>
         <p>
         {mon.get_schema()}
+        </p>
+        <h2>Current Time Point</h2>
+        <p>
+        {mon.most_recent_timepoint}: {mon.most_recent_timestamp if mon.most_recent_timestamp is not None else "No time point and time stamp seen yet"}
         </p>
         <h2>Monitor process information</h2>
         <p> {mon.get_monpoly_pid()}: {mon.monpoly.args if mon.monpoly and mon.monpoly.args else ""} </p>
@@ -63,7 +67,8 @@ def index():
 
 @app.route("/get-policy", methods=["GET", "POST"])
 def get_policy():
-    return {"policy": "not implemented yet"}
+    policy = mon.get_policy()
+    return {"policy": policy}
 
 
 @app.route("/set-policy", methods=["POST"])
@@ -106,7 +111,7 @@ def change_policy():
         return mon.change_policy(path, negate)
 
 
-@app.route("/get-signature", methods=["GET"])
+@app.route("/get-signature", methods=["GET", "POST"])
 def get_signature():
     return {"signature": mon.get_signature()}
 
@@ -152,7 +157,7 @@ def stop_monitor():
     return mon.stop_monpoly()
 
 
-@app.route("/reset-everything", methods=["GET"])
+@app.route("/reset-everything", methods=["GET", "POST"])
 def reset_monitor():
     delete_message = mon.delete_everything()
     return delete_message
@@ -179,7 +184,7 @@ def log():
         return result
 
 
-@app.route("/get-events", methods=["GET"])
+@app.route("/get-events", methods=["GET", "POST"])
 def get_events():
     start_date = None
     if "start" in request.form:
@@ -198,9 +203,10 @@ def get_events():
     return mon.get_events(start_date=start_date, end_date=end_date)
 
 
-@app.route("/get-most-recent", methods=["GET"])
+@app.route("/get-most-recent", methods=["GET", "POST"])
 def get_most_recent():
-    return {"response": mon.get_most_recent_timestamp_from_db()}
+    return {"timestamp": mon.get_most_recent_timestamp_from_db(),
+            "timepoint": mon.get_most_recent_timepoint_from_db()}
 
 ## Database configuration methods
 
@@ -246,7 +252,7 @@ def db_set_pgsql_port():
         return {"error": "no port provided"}
     port = request.form["port"]
     try:
-        mon.db.set_pgsql_port(port)
+        mon.db.set_pgsql_port(int(port))
         mon.write_config()
         return {"response": f"set port to {port}"}
     except Exception as e:
@@ -258,7 +264,7 @@ def db_set_influxdb_port():
         return {"error": "no port provided"}
     port = request.form["port"]
     try:
-        mon.db.set_influxdb_port(port)
+        mon.db.set_influxdb_port(int(port))
         mon.write_config()
         return {"response": f"set port to {port}"}
     except Exception as e:
@@ -276,27 +282,27 @@ def db_set_database():
     except Exception as e:
         return {"error": str(e)}
 
-@app.route("/db-get-user", methods=["GET"])
+@app.route("/db-get-user", methods=["GET", "POST"])
 def db_get_user():
     return {"response": mon.db.get_user()}
 
-@app.route("/db-get-password", methods=["GET"])
+@app.route("/db-get-password", methods=["GET", "POST"])
 def db_get_password():
     return {"response": mon.db.get_password()}
 
-@app.route("/db-get-host", methods=["GET"])
+@app.route("/db-get-host", methods=["GET", "POST"])
 def db_get_host():
     return {"response": mon.db.get_host()}
 
-@app.route("/db-get-pgsql-port", methods=["GET"])
+@app.route("/db-get-pgsql-port", methods=["GET", "POST"])
 def db_get_pgsql_port():
     return {"response": mon.db.get_pgsql_port()}
 
-@app.route("/db-get-influxdb-port", methods=["GET"])
+@app.route("/db-get-influxdb-port", methods=["GET", "POST"])
 def db_get_influxdb_port():
     return {"response": mon.db.get_influxdb_port()}
 
-@app.route("/db-get-database", methods=["GET"])
+@app.route("/db-get-database", methods=["GET", "POST"])
 def db_get_database():
     return {"response": mon.db.get_database()}
     
