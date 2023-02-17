@@ -1,11 +1,9 @@
-FROM monpoly-server:dev
+FROM monpoly:dev
 
 # COPY ./src /backend
 
 RUN apk add --no-cache python3 py3-pip \
     && pip3 install --upgrade pip \
-    # && python3 -m .venv-monpoly \
-    # && source .venv-monpoly/bin/activate \
     && pip3 install questdb psycopg2-binary flask \
     && pip install python-dateutil
 
