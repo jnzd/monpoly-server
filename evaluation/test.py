@@ -8,7 +8,7 @@ import json
 
 
 PYTHON = "python3"  # "python3.9"
-GEN = "gen/gen"
+GEN = "gen" # "gen/gen"
 SIG = "test.sig"
 WRAPPER = "src/app.py"
 MONITOR_PY = "../src/monitor.py"
@@ -186,7 +186,7 @@ def test_wrapper(trace_fn):
 # Evaluation loop
 
 if __name__ == "__main__":
-    N = 1
+    N = range(1)
     LENGTHS = [4**i for i in range(9)]
     DEPTH = 5
     TEMP_FORMULA = "temp.formula"
@@ -199,8 +199,11 @@ if __name__ == "__main__":
 
     #### RQ2
 
-    for _ in range(N):
+    for _ in tqdm(N):
 
+        # TODO don't generate the same formula twice
+        # currently this is deterministic and running the loop multiple times
+        # doesn't add any value
         generate_formula(DEPTH, TEMP_FORMULA)
         generate_formula(DEPTH, TEMP_NEW_FORMULA)
 
@@ -241,17 +244,21 @@ if __name__ == "__main__":
 
             series.append(datapoint)
 
-    df = pd.DataFrame(series)
-    df["length"] = df["length"].astype(int)
-    df["t_opt_a"] = df["t_opt"] / df["length"]
-    df["t_baseline_a"] = df["t_baseline"] / df["length"]
-    print(df)
-    df.to_csv(OUT_FILE_2)
-    series = []
+        df = pd.DataFrame(series)
+        df["length"] = df["length"].astype(int)
+        df["t_opt_a"] = df["t_opt"] / df["length"]
+        df["t_baseline_a"] = df["t_baseline"] / df["length"]
+        print(df)
+        df.to_csv(OUT_FILE_2, index=False)
+        if N == 0:
+            df.to_csv(OUT_FILE_2, index=False)
+        else:
+            df.to_csv(OUT_FILE_2, mode="a", index=False, header=False)
+        series = []
 
     #### RQ1
 
-    for _ in range(N):
+    for _ in tqdm(N):
 
         # generate_formula(DEPTH, TEMP_FORMULA)
 
@@ -283,10 +290,17 @@ if __name__ == "__main__":
 
             series.append(datapoint)
 
-    df = pd.DataFrame(series)
-    df["length"] = df["length"].astype(int)
-    df["t_wrapper_a"] = df["t_wrapper"] / df["length"]
-    df["t_baseline_a"] = df["t_baseline"] / df["length"]
-    df["t_baseline2_a"] = df["t_baseline2"] / df["length"]
-    print(df)
-    df.to_csv(OUT_FILE_1)
+        df = pd.DataFrame(series)
+        df["length"] = df["length"].astype(int)
+        df["t_wrapper_a"] = df["t_wrapper"] / df["length"]
+        df["t_baseline_a"] = df["t_baseline"] / df["length"]
+        df["t_baseline2_a"] = df["t_baseline2"] / df["length"]
+        print(df)
+        df.to_csv(OUT_FILE_1, index=False)
+        if N == 0:
+            df.to_csv(OUT_FILE_1, index=False)
+        else:
+            df.to_csv(OUT_FILE_1, mode='a', index=False, header=None)
+        series = []
+
+    reset_everything()
