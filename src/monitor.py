@@ -17,8 +17,8 @@ os.chdir(dname)
 CONFIG_DIR = os.path.abspath("./monitor-data/")
 LOG_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
 
-# MONPOLY = './monpoly'
-MONPOLY = 'monpoly'
+MONPOLY = 'monpoly' # './monpoly'
+LOGGING = False # True
 
 
 class Monitor:
@@ -65,19 +65,21 @@ class Monitor:
         # but questdb doesn't currently (2022-11-17) support tables with only
         # timestamp column:
         # https://github.com/questdb/questdb/issues/2691
-        self.ts_query_create = "CREATE TABLE ts(time_point INT,time_stamp TIMESTAMP) timestamp(time_stamp) PARTITION BY DAY;"
-        self.ts_query_drop = "DROP TABLE ts;"
+        # self.ts_query_create = "CREATE TABLE ts(time_point INT,time_stamp TIMESTAMP) timestamp(time_stamp) PARTITION BY DAY;"
+        self.ts_query_create = "CREATE TABLE ts(time_point INT,time_stamp TIMESTAMP) timestamp(time_stamp);"
+        self.ts_query_drop = "DROP TABLE IF EXISTS ts;"
         self.monpoly = None
         self.restore_state()
         self.write_config()
 
     def write_server_log(self, msg: str):
         """writes the given message to the server log along with a timestamp"""
-        time_stamp = datetime.now().strftime(LOG_TIMESTAMP_FORMAT)
-        with open(self.log_path, "a", encoding="utf-8") as log:
-            log.write(f"[{time_stamp}] {msg}\n")
+        if LOGGING:
+            time_stamp = datetime.now().strftime(LOG_TIMESTAMP_FORMAT)
+            with open(self.log_path, "a", encoding="utf-8") as log:
+                log.write(f"[{time_stamp}] {msg}\n")
 
-    def check_monitorability(self, sig, pol):
+    def check_monitorability(self, sig, pol, neg):
         """checks if the given policy is monitorable
 
         Args:
@@ -90,8 +92,10 @@ class Monitor:
                 "message" is a string containing the output of monpoly checking
                     the monitorability of the policy
         """
-        self.write_server_log(f"checking monitorability of {sig} and {pol}")
+        self.write_server_log(f"checking monitorability of {sig} and {pol} {'negated' if neg else ''}")
         cmd = [MONPOLY, "-check", "-sig", sig, "-formula", pol]
+        if neg:
+            cmd.append("-negate")
         # TODO: potentially set check to tur and report error to user
         process = subprocess.run(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, check=False
@@ -177,7 +181,7 @@ class Monitor:
             with open(self.policy_path, "r", encoding="utf-8") as pol_file:
                 policy = pol_file.read()
                 pol_file.close()
-        return f'{"NOT" if self.policy_negate else ""} {policy}'
+        return f'{policy} {"(negated)" if self.policy_negate else ""}'
 
     def get_schema(self):
         """get the database schema
@@ -185,7 +189,10 @@ class Monitor:
         Returns:
             _type_: all tables in QuestDB
         """
-        db_response = self.db.run_query("SHOW TABLES;", select=True)
+        with self.db.make_connection() as conn:
+            with conn.cursor() as cur:
+                db_response = self.db.run_query("SHOW TABLES;", cur, select=True)
+
         if "error" in db_response.keys():
             return db_response["error"]
         else:
@@ -265,10 +272,7 @@ class Monitor:
         """
         # as long as monpoly isn't running yet, the policy can still be changed
         if os.path.exists(self.policy_path) and self.monpoly:
-            return {
-                "error": "monpoly is already running and policy has been set. Use change_policy() to change the policy.",
-                "ls pol_dir": os.listdir(self.policy_dir),
-            }
+            return { "error": "monpoly is already running and policy has been set. Use change_policy() to change the policy." }
         os.rename(policy, self.policy_path)
         self.policy_negate = negate
         self.write_server_log(f"set policy: {self.get_policy()}")
@@ -345,7 +349,7 @@ class Monitor:
                 "ls pol_dir": os.listdir(self.policy_dir),
             }
 
-        check = self.check_monitorability(self.signature_path, new_policy_path)
+        check = self.check_monitorability(self.signature_path, new_policy_path, self.policy_negate)
         if not check["monitorable"]:
             self.write_server_log(
                 "[change_policy()] cannot change policy, because policy is not monitorable"
@@ -486,13 +490,16 @@ class Monitor:
         # TODO possibly set check to True and report errors to the user
         process = subprocess.run(cmd, capture_output=True, text=True, check=False)
         query_create = process.stdout
-        create_response1 = self.db.run_query(query_create)
-        if 'error' in create_response1.keys():
-            return create_response1
-        create_response2 = self.db.run_query(self.ts_query_create)
-        if 'error' in create_response2.keys():
-            # TODO delete already created tables
-            return create_response1 | create_response2
+        with self.db.make_connection() as conn:
+            with conn.cursor() as cur:
+                create_response1 = self.db.run_query(query_create, cur)
+                if 'error' in create_response1.keys():
+                    return create_response1
+                create_response2 = self.db.run_query(self.ts_query_create, cur)
+                if 'error' in create_response2.keys():
+                    # TODO delete already created tables
+                    return create_response1 | create_response2
+        self.write_server_log(f'ran queries: {query_create} & {self.ts_query_create}')
         return {"success": create_response1['response'] + " & " + create_response2['response']}
 
     def start_monpoly(self, sig, pol, restart: str = "", log: str = ""):
@@ -569,7 +576,7 @@ class Monitor:
             return "no policy provided"
 
         if not restart:
-            check = self.check_monitorability(self.signature_path, self.policy_path)
+            check = self.check_monitorability(self.signature_path, self.policy_path, self.policy_negate)
             if not check["monitorable"]:
                 self.write_server_log(
                     "[launch()] cannot launch monpoly, because policy is not monitorable"
@@ -615,7 +622,9 @@ class Monitor:
         )
 
         # TODO prompt user before running this query and deleting all tables
-        query_response = self.db.run_query(query)
+        with self.db.make_connection() as conn:
+            with conn.cursor() as cur:
+                query_response = self.db.run_query(query, cur)
         os.remove(self.sql_drop_path)
         if "error" in query_response.keys():
             return query_response
@@ -764,17 +773,20 @@ class Monitor:
         Returns:
             _type_: the most recent time stamp seen by the database
         """
-        try:
-            t = self.db.run_query("SELECT MAX(time_stamp) FROM ts;", select=True)
-            if 'error' in t.keys():
-                return None
-            t = t['response']
-            if t:
-                return t[0][0]
-            else:
-                return None
-        except psycopg2.DatabaseError:
-            return None
+        with self.db.make_connection() as conn:
+            with conn.cursor() as cur:
+                # TODO is this try catch necessary?
+                try:
+                    t = self.db.run_query("SELECT MAX(time_stamp) FROM ts;", cur, select=True)
+                    if 'error' in t.keys():
+                        return None
+                    t = t['response']
+                    if t:
+                        return t[0][0]
+                    else:
+                        return None
+                except psycopg2.DatabaseError:
+                    return None
 
     def get_most_recent_timepoint_from_db(self) -> int:
         """queries the most recent time point (index) in the database
@@ -782,15 +794,19 @@ class Monitor:
         Returns:
             _type_: the most recent time stamp seen by the database
         """
-        try:
-            t = self.db.run_query("SELECT MAX(time_point) FROM ts;", select=True)
-            if 'error' in t.keys():
-                return -1
-            # database query result comes as a list of list
-            # one list per table
-            return int(t['response'][0][0])
-        except psycopg2.DatabaseError:
-            return -1
+        with self.db.make_connection() as conn:
+            with conn.cursor() as cur:
+                # TODO is this try catch necessary?
+                try:
+                    t = self.db.run_query("SELECT MAX(time_point) FROM ts;", cur, select=True)
+                    if 'error' in t.keys():
+                        return -1
+                    # database query result comes as a list of list
+                    # one list per table
+                    tp = t['response'][0][0]
+                    return int(tp) if tp is not None else -1
+                except psycopg2.DatabaseError:
+                    return -1
 
     def store_timepoints_in_db(self, timepoints: list):
         """logs the given events in the database"""
@@ -798,23 +814,21 @@ class Monitor:
         for timepoint in timepoints:
             if "skip" in timepoint.keys():
                 continue
-            ts = datetime.fromtimestamp(timepoint["timestamp-int"])
-            tp = self.most_recent_timepoint + 1
-            buf.row("ts", symbols=None, columns={"time_point": tp}, at=ts)
+            self.most_recent_timestamp = datetime.fromtimestamp(timepoint["timestamp-int"])
+            self.most_recent_timepoint = self.most_recent_timepoint + 1
+            buf.row("ts", symbols=None, columns={"time_point": self.most_recent_timepoint}, at=self.most_recent_timestamp)
             for p in timepoint["predicates"]:
                 if "name" not in p.keys():
                     return {"log_events error": 'predicate must have a "name"'}
                 elif "occurrences" not in p.keys():
                     # predicate can be named without an occurrence
-                    break
+                    continue
                 name = p["name"]
                 for occ in p["occurrences"]:
-                    columns = {"time_point": tp} | {
+                    columns = {"time_point": self.most_recent_timepoint} | {
                         f"x{i+1}": o for i, o in enumerate(occ)
                     }
-                    buf.row(name, symbols=None, columns=columns, at=ts)
-                self.most_recent_timestamp = ts
-                self.most_recent_timepoint = tp
+                    buf.row(name, symbols=None, columns=columns, at=self.most_recent_timestamp)
         # update config after going over all timestamps
         self.write_config()
         with Sender(self.db.host, self.db.port_influxdb) as sender:
@@ -872,7 +886,13 @@ class Monitor:
         dictionaries
         """
         self.write_server_log(f"create_log_strings({timepoints})")
+        # print('------------------------------')
+        # print(timepoints)
+        # print('------------------------------')
         for timepoint in timepoints:
+            # print('#############')
+            # print(timepoint)
+            # print('#############')
             timestamp = timepoint["timestamp-int"]
             monpoly_string = f"@{timestamp} "
 
@@ -921,6 +941,7 @@ class Monitor:
         It returns a timestamp in seconds since 1970-01-01 00:00:00
         (in monpoly/scr/formula_parser.mly:timeunits it can be seen that
         seconds are the smallest and default time unit in monpoly)
+        If timestamp_now has no timezone info, it is assumed to be UTC
         """
         if "timestamp" in event.keys():
             try:
@@ -931,6 +952,9 @@ class Monitor:
                 ts = timestamp_now
         else:
             ts = timestamp_now
+        if ts.tzinfo is None:
+            ts = ts.astimezone()
+            ts = ts + ts.utcoffset()
         return int(ts.timestamp())
 
     def log_timepoints(self, timepoints_json: str) -> dict:
@@ -1089,6 +1113,7 @@ class Monitor:
         upper_int = min(int(bounds[1]) + t, t)
         upper = datetime.utcfromtimestamp(upper_int)
         lower = datetime.utcfromtimestamp(int(bounds[0]) + t)
+        self.write_server_log(f"interval: {i} + {self.most_recent_timestamp} -> lower: {lower}, upper: {upper}")
         if upper == "*" and lower == "*":
             query = ""
         elif upper == "*":
@@ -1212,13 +1237,15 @@ class Monitor:
             queries = self.queries_from_dates(start_date, end_date)
 
         results = []
-        for predicate_name, query in queries:
-            self.write_server_log(f"    running query: {query}")
-            response = self.db.run_query(query, select=True)
-            if 'error' in response.keys():
-                return response['error']
-            results.append({predicate_name: response['response']})
+        self.write_server_log(f"    current timestamp: {self.most_recent_timestamp}")
+        with self.db.make_connection() as conn:
+            with conn.cursor() as cur:
+                for predicate_name, query in queries:
+                    self.write_server_log(f"    running query: {query}")
+                    response = self.db.run_query(query, cur, select=True)
+                    if 'error' in response.keys():
+                        return response['error']
+                    results.append({predicate_name: response['response']})
 
-        print(results)
         monpoly_log = self.db_response_to_timepoints(results)
         return monpoly_log
