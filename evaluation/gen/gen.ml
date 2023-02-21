@@ -179,7 +179,7 @@ let format_date (d: Unix.tm) =
   let format_2d i =
     (if i < 10 then "0" else "") ^ string_of_int i in 
   "19" ^ string_of_int (d.tm_year) ^ "-"
-  ^ format_2d d.tm_mon ^ "-"
+  ^ format_2d (d.tm_mon+1) ^ "-"
   ^ format_2d d.tm_mday ^ " " 
   ^ format_2d d.tm_hour ^ ":"
   ^ format_2d d.tm_min ^ ":"
