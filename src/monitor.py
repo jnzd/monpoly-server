@@ -7,7 +7,6 @@ from dateutil.parser import ParserError
 import psycopg2
 from questdb.ingress import Buffer, Sender
 from db_helper import DbHelper
-import time
 
 # if this path is absolute all subsequent paths are relative to this path
 # will be absolute paths
@@ -19,6 +18,8 @@ LOG_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 MONPOLY = 'monpoly' # './monpoly'
 LOGGING = False # True
+# LOGGING = True # True
+TIMEPOINTS_TABLE = "time_points_unique_not_reserved_name"
 
 
 class Monitor:
@@ -66,8 +67,8 @@ class Monitor:
         # timestamp column:
         # https://github.com/questdb/questdb/issues/2691
         # self.ts_query_create = "CREATE TABLE ts(time_point INT,time_stamp TIMESTAMP) timestamp(time_stamp) PARTITION BY DAY;"
-        self.ts_query_create = "CREATE TABLE ts(time_point INT,time_stamp TIMESTAMP) timestamp(time_stamp);"
-        self.ts_query_drop = "DROP TABLE IF EXISTS ts;"
+        self.ts_query_create = f"CREATE TABLE {TIMEPOINTS_TABLE}(time_point INT,time_stamp TIMESTAMP) timestamp(time_stamp);"
+        self.ts_query_drop = f"DROP TABLE IF EXISTS {TIMEPOINTS_TABLE};"
         self.monpoly = None
         self.restore_state()
         self.write_config()
@@ -189,9 +190,7 @@ class Monitor:
         Returns:
             _type_: all tables in QuestDB
         """
-        with self.db.make_connection() as conn:
-            with conn.cursor() as cur:
-                db_response = self.db.run_query("SHOW TABLES;", cur, select=True)
+        db_response = self.db.run_query("SHOW TABLES;", select=True)
 
         if "error" in db_response.keys():
             return db_response["error"]
@@ -377,6 +376,8 @@ class Monitor:
             timepoints = self.get_events()
         else:
             timepoints = self.get_events(relative_intervals=relative_intervals)
+        # print(naive)
+        # print(f"timepoints: {len(timepoints)}")
         timepoints_monpoly = os.path.join(self.events_dir, "events_policy_change.log")
         self.create_log_strings(timepoints, output_file=timepoints_monpoly)
         self.stop_monpoly(save_state=False)
@@ -489,18 +490,13 @@ class Monitor:
         cmd = [MONPOLY, "-sql", sig]
         # TODO possibly set check to True and report errors to the user
         process = subprocess.run(cmd, capture_output=True, text=True, check=False)
-        query_create = process.stdout
-        with self.db.make_connection() as conn:
-            with conn.cursor() as cur:
-                create_response1 = self.db.run_query(query_create, cur)
-                if 'error' in create_response1.keys():
-                    return create_response1
-                create_response2 = self.db.run_query(self.ts_query_create, cur)
-                if 'error' in create_response2.keys():
-                    # TODO delete already created tables
-                    return create_response1 | create_response2
-        self.write_server_log(f'ran queries: {query_create} & {self.ts_query_create}')
-        return {"success": create_response1['response'] + " & " + create_response2['response']}
+        query_create = process.stdout + self.ts_query_create
+        create_response = self.db.run_query(query_create)
+        self.write_server_log(f'ran queries: {query_create}\n\t with response: {create_response}')
+        if 'error' in create_response.keys():
+            return create_response
+        # self.write_server_log(f'ran queries: {query_create} & {self.ts_query_create}')
+        return {"success": create_response['response']}
 
     def start_monpoly(self, sig, pol, restart: str = "", log: str = ""):
         """starts monpoly with the given signature and policy
@@ -622,9 +618,7 @@ class Monitor:
         )
 
         # TODO prompt user before running this query and deleting all tables
-        with self.db.make_connection() as conn:
-            with conn.cursor() as cur:
-                query_response = self.db.run_query(query, cur)
+        query_response = self.db.run_query(query)
         os.remove(self.sql_drop_path)
         if "error" in query_response.keys():
             return query_response
@@ -663,6 +657,7 @@ class Monitor:
         stop_log = self.stop_monpoly(save_state=False)
         drop_log = self.delete_database()
         conf_log = self.delete_config()
+        # self.clear_directory(CONFIG_DIR)
         self.clear_directory(self.signature_dir)
         self.clear_directory(self.policy_dir)
         self.clear_directory(self.events_dir)
@@ -673,6 +668,8 @@ class Monitor:
         self.write_config()
         if os.path.exists(self.monitor_state_path):
             os.remove(self.monitor_state_path)
+        if os.path.exists(self.log_path):
+            os.remove(self.log_path)
         return {"deleted everything": "done"} | drop_log | stop_log | conf_log
 
     def stop_monpoly(self, save_state: bool = True):
@@ -773,20 +770,18 @@ class Monitor:
         Returns:
             _type_: the most recent time stamp seen by the database
         """
-        with self.db.make_connection() as conn:
-            with conn.cursor() as cur:
-                # TODO is this try catch necessary?
-                try:
-                    t = self.db.run_query("SELECT MAX(time_stamp) FROM ts;", cur, select=True)
-                    if 'error' in t.keys():
-                        return None
-                    t = t['response']
-                    if t:
-                        return t[0][0]
-                    else:
-                        return None
-                except psycopg2.DatabaseError:
-                    return None
+        try:
+            query = f"SELECT MAX(time_stamp) FROM {TIMEPOINTS_TABLE};"
+            t = self.db.run_query(query, select=True)
+            if 'error' in t.keys():
+                return None
+            t = t['response']
+            if t:
+                return t[0][0]
+            else:
+                return None
+        except psycopg2.DatabaseError:
+            return None
 
     def get_most_recent_timepoint_from_db(self) -> int:
         """queries the most recent time point (index) in the database
@@ -794,19 +789,17 @@ class Monitor:
         Returns:
             _type_: the most recent time stamp seen by the database
         """
-        with self.db.make_connection() as conn:
-            with conn.cursor() as cur:
-                # TODO is this try catch necessary?
-                try:
-                    t = self.db.run_query("SELECT MAX(time_point) FROM ts;", cur, select=True)
-                    if 'error' in t.keys():
-                        return -1
-                    # database query result comes as a list of list
-                    # one list per table
-                    tp = t['response'][0][0]
-                    return int(tp) if tp is not None else -1
-                except psycopg2.DatabaseError:
-                    return -1
+        try:
+            query = f"SELECT MAX(time_point) FROM {TIMEPOINTS_TABLE};"
+            t = self.db.run_query(query, select=True)
+            if 'error' in t.keys():
+                return -1
+            # database query result comes as a list of list
+            # one list per table
+            tp = t['response'][0][0]
+            return int(tp) if tp is not None else -1
+        except psycopg2.DatabaseError:
+            return -1
 
     def store_timepoints_in_db(self, timepoints: list):
         """logs the given events in the database"""
@@ -816,7 +809,7 @@ class Monitor:
                 continue
             self.most_recent_timestamp = datetime.fromtimestamp(timepoint["timestamp-int"])
             self.most_recent_timepoint = self.most_recent_timepoint + 1
-            buf.row("ts", symbols=None, columns={"time_point": self.most_recent_timepoint}, at=self.most_recent_timestamp)
+            buf.row(TIMEPOINTS_TABLE, symbols=None, columns={"time_point": self.most_recent_timepoint}, at=self.most_recent_timestamp)
             for p in timepoint["predicates"]:
                 if "name" not in p.keys():
                     return {"log_events error": 'predicate must have a "name"'}
@@ -886,13 +879,7 @@ class Monitor:
         dictionaries
         """
         self.write_server_log(f"create_log_strings({timepoints})")
-        # print('------------------------------')
-        # print(timepoints)
-        # print('------------------------------')
         for timepoint in timepoints:
-            # print('#############')
-            # print(timepoint)
-            # print('#############')
             timestamp = timepoint["timestamp-int"]
             monpoly_string = f"@{timestamp} "
 
@@ -1031,8 +1018,8 @@ class Monitor:
             "[db_response_to_timepoints()] converting db response to timepoints"
         )
         db_response_dict = {k: v for d in db_response for k, v in d.items()}
-        if db_response_dict["ts"] is not None:
-            timestamps = {x[1] for x in db_response_dict["ts"] if x is not None}
+        if db_response_dict[TIMEPOINTS_TABLE] is not None:
+            timestamps = {x[1] for x in db_response_dict[TIMEPOINTS_TABLE] if x is not None}
         else:
             return []
         result = dict()
@@ -1046,7 +1033,7 @@ class Monitor:
             result[ts_int] = ts_dict
 
         for predicate_name in db_response_dict.keys():
-            if predicate_name == "ts":
+            if predicate_name == TIMEPOINTS_TABLE:
                 continue
             for occurrence in db_response_dict[predicate_name]:
                 ts = int(occurrence[-1].timestamp())
@@ -1174,8 +1161,8 @@ class Monitor:
             query = self.relative_intervals_to_query_per_predicate(name, intervals)
             queries.append((name, query))
         parsed_interval = self.parse_interval(rl)
-        query = f"SELECT * FROM ts WHERE {parsed_interval};"
-        queries.append(("ts", query))
+        query = f"SELECT * FROM {TIMEPOINTS_TABLE} WHERE {parsed_interval};"
+        queries.append((TIMEPOINTS_TABLE, query))
         return queries
 
     def queries_from_dates(
@@ -1209,7 +1196,7 @@ class Monitor:
         else:
             query_suffix = ""
 
-        names.append("ts")
+        names.append(TIMEPOINTS_TABLE)
         for predicate_name in names:
             query = f"SELECT * FROM {predicate_name} {query_suffix};"
             queries.append((predicate_name, query))
@@ -1236,16 +1223,26 @@ class Monitor:
         else:
             queries = self.queries_from_dates(start_date, end_date)
 
+        # TODO the queries could potentially be combined into a single string
+        #      possibly not feasible, because cursor.fetchall() inside
+        #      db.run_query() would return a list of tuples, where it isn't clear
+        #      which tuple belongs to which predicate
+
+        # query = "/n".join([q[1] for q in queries])
+        # self.write_server_log(f"    running query: {query}")
+        # response = self.db.run_query(query, select=True)
+        # if 'error' in response.keys():
+        #     return response['error']
+        # results.append({predicate_name: response['response']})
+
         results = []
         self.write_server_log(f"    current timestamp: {self.most_recent_timestamp}")
-        with self.db.make_connection() as conn:
-            with conn.cursor() as cur:
-                for predicate_name, query in queries:
-                    self.write_server_log(f"    running query: {query}")
-                    response = self.db.run_query(query, cur, select=True)
-                    if 'error' in response.keys():
-                        return response['error']
-                    results.append({predicate_name: response['response']})
+        for predicate_name, query in queries:
+            self.write_server_log(f"    running query: {query}")
+            response = self.db.run_query(query, select=True)
+            if 'error' in response.keys():
+                return response['error']
+            results.append({predicate_name: response['response']})
 
         monpoly_log = self.db_response_to_timepoints(results)
         return monpoly_log

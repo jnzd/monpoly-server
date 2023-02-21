@@ -1,8 +1,10 @@
 import psycopg2 as pg
+from time import time
 
 USER     = "admin"
 PASSWORD = "quest"
 HOST     = "localhost" # questdb
+# HOST     = "172.28.128.1"
 DATABASE = "qdb"
 
 class DbHelper:
@@ -61,20 +63,31 @@ class DbHelper:
         )
         return connection
 
-    def run_query(self, query: str, cursor, select: bool = False,) -> dict:
+    def run_query(self, query: str, select: bool = False,) -> dict:
         """
         Runs the given SQL query on the database
         """
+        connection = None
+        cursor = None
         try:
+            connection = self.make_connection()
+            cursor = connection.cursor()
+            # t = time()
             cursor.execute(query)
+            # print("query run time: ", time() - t)
             if select:
                 return {"response": cursor.fetchall()}
             else:
                 return {"response": "successfully executed query: " + query}
-        # except pg.OperationalError as error:
-        # except pg.DatabaseError as error:
-        except Exception as error:
-            return{"error": str(error)}
+        except pg.OperationalError as error:
+            return{"error": f"pg.OperationalError: {str(error)}"}
+        except pg.DatabaseError as error:
+            return{"error": f"pg.DatabaseError: {str(error)}"}
+        finally:
+            if cursor is not None:
+                cursor.close()
+            if connection is not None:
+                connection.close()
 
 
     def set_user(self, user: str):
