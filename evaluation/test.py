@@ -81,7 +81,7 @@ def change_policy(formula_fn, naive=False):
             r = requests.post(
                 CHANGE_POLICY_URL,
                 files={"policy": open(formula_fn, "rb")},
-                params={"naive": 1},
+                data={"naive": 1},
             )
         else:
             r = requests.post(
@@ -186,8 +186,9 @@ def test_wrapper(trace_fn):
 # Evaluation loop
 
 if __name__ == "__main__":
-    N = range(1)
+    N = range(5)
     LENGTHS = [4**i for i in range(9)]
+    # LENGTHS = [4**i for i in [1]]
     DEPTH = 5
     TEMP_FORMULA = "temp.formula"
     TEMP_NEW_FORMULA = "temp_new.formula"
@@ -199,7 +200,7 @@ if __name__ == "__main__":
 
     #### RQ2
 
-    for _ in tqdm(N):
+    for n in tqdm(N):
 
         # TODO don't generate the same formula twice
         # currently this is deterministic and running the loop multiple times
@@ -220,7 +221,7 @@ if __name__ == "__main__":
 
             test_wrapper(TEMP_TRACE)
 
-            t_baseline = change_policy(TEMP_FORMULA, naive=True)
+            t_baseline = change_policy(TEMP_NEW_FORMULA, naive=True)
 
             stop_wrapper(wrapper)
 
@@ -234,7 +235,7 @@ if __name__ == "__main__":
 
             test_wrapper(TEMP_TRACE)
 
-            t_opt = change_policy(TEMP_FORMULA)
+            t_opt = change_policy(TEMP_NEW_FORMULA)
 
             stop_wrapper(wrapper)
 
@@ -244,21 +245,17 @@ if __name__ == "__main__":
 
             series.append(datapoint)
 
-        df = pd.DataFrame(series)
-        df["length"] = df["length"].astype(int)
-        df["t_opt_a"] = df["t_opt"] / df["length"]
-        df["t_baseline_a"] = df["t_baseline"] / df["length"]
-        print(df)
-        df.to_csv(OUT_FILE_2, index=False)
-        if N == 0:
-            df.to_csv(OUT_FILE_2, index=False)
-        else:
-            df.to_csv(OUT_FILE_2, mode="a", index=False, header=False)
-        series = []
+    df = pd.DataFrame(series)
+    df["length"] = df["length"].astype(int)
+    df["t_opt_a"] = df["t_opt"] / df["length"]
+    df["t_baseline_a"] = df["t_baseline"] / df["length"]
+    print(df)
+    df.to_csv(OUT_FILE_2, index=False)
+    series = []
 
     #### RQ1
 
-    for _ in tqdm(N):
+    for n in tqdm(N):
 
         # generate_formula(DEPTH, TEMP_FORMULA)
 
@@ -290,17 +287,16 @@ if __name__ == "__main__":
 
             series.append(datapoint)
 
-        df = pd.DataFrame(series)
-        df["length"] = df["length"].astype(int)
-        df["t_wrapper_a"] = df["t_wrapper"] / df["length"]
-        df["t_baseline_a"] = df["t_baseline"] / df["length"]
-        df["t_baseline2_a"] = df["t_baseline2"] / df["length"]
-        print(df)
-        df.to_csv(OUT_FILE_1, index=False)
-        if N == 0:
-            df.to_csv(OUT_FILE_1, index=False)
-        else:
-            df.to_csv(OUT_FILE_1, mode='a', index=False, header=None)
-        series = []
+    df = pd.DataFrame(series)
+    df["length"] = df["length"].astype(int)
+    df["t_wrapper_a"] = df["t_wrapper"] / df["length"]
+    df["t_baseline_a"] = df["t_baseline"] / df["length"]
+    df["t_baseline2_a"] = df["t_baseline2"] / df["length"]
+    print(df)
+    df.to_csv(OUT_FILE_1, index=False)
+    series = []
 
-    reset_everything()
+    try:
+        reset_everything()
+    except:
+        pass
