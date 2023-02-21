@@ -2,3 +2,4 @@ __pycache__/*
 *.code-workspace
 .vscode/*
 .fleet/*
+monitor-data
